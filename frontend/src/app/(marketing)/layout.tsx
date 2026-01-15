@@ -1,0 +1,37 @@
+/**
+ * Marketing Layout - Scroll-Driven Cinematic Experience
+ * ======================================================
+ * Clean layout for landing pages - no 3D background (PhoneMockup provides visuals)
+ */
+
+import { MarketingNav } from "@/components/layout/MarketingNav";
+import { MarketingFooter } from "@/components/layout/MarketingFooter";
+
+export default function MarketingLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative min-h-screen bg-neutral-950">
+      {/* Noise Texture */}
+      <div className="fixed inset-0 z-[1] pointer-events-none opacity-[0.02]">
+        <div
+          className="absolute inset-0"
+          style={{
+            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+          }}
+        />
+      </div>
+
+      {/* Navigation */}
+      <MarketingNav />
+
+      {/* Main Content */}
+      <main className="relative z-10">{children}</main>
+
+      {/* Footer */}
+      <MarketingFooter />
+    </div>
+  );
+}

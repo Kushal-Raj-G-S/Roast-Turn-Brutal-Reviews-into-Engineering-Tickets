@@ -1,0 +1,349 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   ROAST - Cyber-Industrial Design System
+   Void Black, Neon Magma Red, Frosted Glass, Visible Grid Lines
+   ============================================================================ */
+
+:root {
+  /* Void Black palette - Dark Theme */
+  --void-black: #030303;
+  --void-deep: #050505;
+  --void-surface: #0a0a0a;
+  --void-elevated: #111111;
+  
+  /* Magma palette */
+  --magma-core: #FF2E00;
+  --magma-hot: #FF5500;
+  --magma-ember: #FF8800;
+  --magma-glow: rgba(255, 46, 0, 0.3);
+  
+  /* Frost/Glass - Dark */
+  --frost-border: rgba(255, 255, 255, 0.05);
+  --frost-border-hover: rgba(255, 255, 255, 0.1);
+  --frost-surface: rgba(0, 0, 0, 0.4);
+  
+  /* Typography - Dark */
+  --text-primary: #ededed;
+  --text-secondary: #888888;
+  --text-muted: #555555;
+  
+  --background: var(--void-black);
+  --foreground: var(--text-primary);
+}
+
+/* Light Theme */
+.light-theme {
+  /* Light palette */
+  --void-black: #ffffff;
+  --void-deep: #f8f9fa;
+  --void-surface: #f0f1f3;
+  --void-elevated: #e8e9eb;
+  
+  /* Magma palette stays the same for accents */
+  --magma-core: #FF2E00;
+  --magma-hot: #FF5500;
+  --magma-ember: #FF8800;
+  --magma-glow: rgba(255, 46, 0, 0.15);
+  
+  /* Frost/Glass - Light */
+  --frost-border: rgba(0, 0, 0, 0.08);
+  --frost-border-hover: rgba(0, 0, 0, 0.15);
+  --frost-surface: rgba(255, 255, 255, 0.8);
+  
+  /* Typography - Light */
+  --text-primary: #1a1a1a;
+  --text-secondary: #666666;
+  --text-muted: #999999;
+  
+  --background: var(--void-black);
+  --foreground: var(--text-primary);
+}
+
+/* Light theme body override */
+.light-theme body {
+  background: #f5f5f7 !important;
+  color: #1a1a1a !important;
+}
+
+/* Light theme main container backgrounds */
+.light-theme main,
+.light-theme div[class*="min-h-screen"] {
+  background: #f5f5f7 !important;
+}
+
+/* Light theme specific overrides */
+.light-theme .noise-overlay {
+  opacity: 0.015;
+  mix-blend-mode: multiply;
+}
+
+.light-theme ::-webkit-scrollbar-track {
+  background: #f0f1f3;
+}
+
+.light-theme ::-webkit-scrollbar-thumb {
+  background: #d0d1d3;
+}
+
+.light-theme ::-webkit-scrollbar-thumb:hover {
+  background: var(--magma-core);
+}
+
+/* Light theme card backgrounds */
+.light-theme [class*="bg-black"],
+.light-theme [class*="bg-neutral-900"],
+.light-theme [class*="bg-black/"] {
+  background: #ffffff !important;
+}
+
+.light-theme [class*="backdrop-blur"] {
+  background: rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: blur(24px);
+}
+
+.light-theme [class*="bg-white/5"] {
+  background: rgba(0, 0, 0, 0.03) !important;
+}
+
+.light-theme [class*="bg-white/10"] {
+  background: rgba(0, 0, 0, 0.05) !important;
+}
+
+.light-theme [class*="bg-white/20"] {
+  background: rgba(0, 0, 0, 0.08) !important;
+}
+
+.light-theme [class*="bg-neutral-800"] {
+  background: #e8e9eb !important;
+}
+
+.light-theme [class*="bg-neutral-700"] {
+  background: #d0d1d3 !important;
+}
+
+/* Light theme borders */
+.light-theme [class*="border-white/5"] {
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+.light-theme [class*="border-white/10"] {
+  border-color: rgba(0, 0, 0, 0.12) !important;
+}
+
+.light-theme [class*="border-white/20"] {
+  border-color: rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Light theme text colors */
+.light-theme [class*="text-white"]:not([class*="bg-gradient"]):not([class*="bg-orange"]):not([class*="bg-red"]) {
+  color: #1a1a1a !important;
+}
+
+.light-theme [class*="text-neutral-500"] {
+  color: #666666 !important;
+}
+
+.light-theme [class*="text-neutral-400"] {
+  color: #888888 !important;
+}
+
+.light-theme [class*="text-neutral-600"] {
+  color: #555555 !important;
+}
+
+.light-theme [class*="text-neutral-300"] {
+  color: #4a4a4a !important;
+}
+
+/* Light theme hover states */
+.light-theme [class*="hover:bg-white/5"]:hover {
+  background: rgba(0, 0, 0, 0.05) !important;
+}
+
+.light-theme [class*="hover:bg-white/10"]:hover {
+  background: rgba(0, 0, 0, 0.08) !important;
+}
+
+.light-theme [class*="hover:text-white"]:hover {
+  color: #1a1a1a !important;
+}
+
+/* Light theme shadows */
+.light-theme [style*="box-shadow"] {
+  box-shadow: 
+    inset 0 1px 0 0 rgba(0, 0, 0, 0.05),
+    0 4px 24px rgba(0, 0, 0, 0.08) !important;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-azeret);
+  --font-heading: var(--font-space);
+  --font-display: var(--font-blackops);
+}
+
+/* ============================================================================
+   BASE STYLES
+   ============================================================================ */
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--void-black);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Typography classes for different font styles */
+.font-display {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.font-heading {
+  font-family: var(--font-heading), system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.font-mono {
+  font-family: var(--font-mono), monospace;
+  font-weight: 500;
+  letter-spacing: 0em;
+}
+
+/* Clean animations - no chapri glow */
+.animate-slide-up {
+  animation: slideUp 0.6s ease-out forwards;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.8s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.text-gradient {
+  background: linear-gradient(135deg, #ffffff 0%, #888888 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.text-gradient-fire {
+  background: linear-gradient(135deg, #ff5500 0%, #ff2e00 50%, #ff8800 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Selection - Magma Red */
+::selection {
+  background-color: var(--magma-core);
+  color: white;
+}
+
+::-moz-selection {
+  background-color: var(--magma-core);
+  color: white;
+}
+
+/* ============================================================================
+   NOISE TEXTURE OVERLAY - Film Grain Effect
+   ============================================================================ */
+
+.noise-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 128px 128px;
+}
+
+/* ============================================================================
+   CUSTOM SCROLLBAR - Subtle Magma
+   ============================================================================ */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--void-deep);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--void-elevated);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--magma-core);
+}
+
+/* ============================================================================
+   UTILITY CLASSES
+   ============================================================================ */
+
+/* Glow effects */
+.glow-magma {
+  box-shadow: 0 0 20px var(--magma-glow);
+}
+
+.glow-magma-intense {
+  box-shadow: 0 0 40px var(--magma-glow), 0 0 80px rgba(255, 46, 0, 0.15);
+}
+
+/* Glass morphism */
+.glass {
+  background: var(--frost-surface);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--frost-border);
+}
+
+.glass-hover:hover {
+  border-color: var(--frost-border-hover);
+}
+
+/* Text gradient - Magma */
+.text-magma-gradient {
+  background: linear-gradient(to right, var(--magma-hot), var(--magma-core));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Grid fade mask */
+.mask-radial-fade {
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 30%, transparent 100%);
+}
