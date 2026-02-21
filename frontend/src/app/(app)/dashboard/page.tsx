@@ -30,113 +30,12 @@ interface UserStats {
   average_sentiment_score: number | null;
 }
 
-// Mock ticket data - replace with API integration
-const mockTickets: Ticket[] = [
-  {
-    id: "1",
-    title: "App crashes on startup after update",
-    summary: "Multiple users reporting crashes immediately after updating to v2.3.0. Stack traces point to authentication module initialization.",
-    severity: "critical",
-    cluster_id: "cluster-1",
-    app_version: "2.3.0",
-    device_type: "Android",
-    review_count: 47,
-    status: "fresh",
-  },
-  {
-    id: "2",
-    title: "Login takes too long",
-    summary: "Users experiencing 10+ second delays during login. Likely related to slow token refresh endpoint.",
-    severity: "high",
-    cluster_id: "cluster-2",
-    app_version: "2.2.8",
-    device_type: "iOS",
-    review_count: 23,
-    status: "fresh",
-  },
-  {
-    id: "3",
-    title: "Dark mode colors are hard to read",
-    summary: "Text contrast issues in dark mode, particularly in settings and profile screens.",
-    severity: "medium",
-    cluster_id: "cluster-3",
-    app_version: "2.3.0",
-    device_type: "All",
-    review_count: 15,
-    status: "fixing",
-  },
-  {
-    id: "4",
-    title: "Push notifications not working",
-    summary: "Android users not receiving push notifications. May be related to new Firebase SDK version.",
-    severity: "high",
-    cluster_id: "cluster-4",
-    app_version: "2.3.0",
-    device_type: "Android",
-    review_count: 31,
-    status: "fixing",
-  },
-  {
-    id: "5",
-    title: "Battery drain issues",
-    summary: "App consuming excessive battery in background. Users report 20-30% drain overnight.",
-    severity: "medium",
-    cluster_id: "cluster-5",
-    app_version: "2.2.5",
-    device_type: "iOS",
-    review_count: 18,
-    status: "resolved",
-  },
-  {
-    id: "6",
-    title: "Typo in onboarding screen",
-    summary: "Welcome message contains spelling error on third onboarding slide.",
-    severity: "low",
-    cluster_id: "cluster-6",
-    app_version: "2.3.0",
-    device_type: "All",
-    review_count: 5,
-    status: "resolved",
-  },
-];
-
-const stats = [
-  {
-    title: "Fresh Tickets",
-    value: "12",
-    change: "+3 today",
-    icon: Flame,
-    color: "from-red-500 to-orange-600",
-  },
-  {
-    title: "In Progress",
-    value: "5",
-    change: "2 critical",
-    icon: Clock,
-    color: "from-orange-500 to-amber-500",
-  },
-  {
-    title: "Resolved",
-    value: "28",
-    change: "+7 this week",
-    icon: CheckCircle2,
-    color: "from-emerald-500 to-green-600",
-  },
-  {
-    title: "Response Time",
-    value: "4.2h",
-    change: "-23% avg",
-    icon: TrendingUp,
-    color: "from-blue-500 to-cyan-500",
-  },
-];
-
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [stats, setStats] = useState<UserStats | null>(null);
   const [uploads, setUploads] = useState<UploadType[]>([]);
-  const [tickets, setTickets] = useState<Ticket[]>(mockTickets); // Start with mock, replace with real data
+  const [tickets, setTickets] = useState<Ticket[]>([]); // Real data from Supabase
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -190,50 +89,30 @@ export default function DashboardPage() {
         average_sentiment_score: null,
       });
 
-      // Fetch uploads from backend API
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        apiClient.setToken(session.access_token);
-        
-        try {
-          const uploadsData = await apiClient.getUploads();
-          setUploads(uploadsData);
-          
-          // Convert uploads to tickets for display
-          if (uploadsData.length > 0) {
-            const allClusters: Ticket[] = [];
-            
-            for (const upload of uploadsData.slice(0, 3)) { // Get clusters from first 3 uploads
-              try {
-                const clusters = await apiClient.getUploadClusters(upload.id);
-                
-                clusters.forEach((cluster: Cluster, index: number) => {
-                  allClusters.push({
-                    id: cluster.id.toString(),
-                    title: cluster.title,
-                    summary: `From upload: ${upload.filename}`,
-                    severity: cluster.severity as any,
-                    cluster_id: cluster.cluster_uuid,
-                    app_version: "N/A",
-                    device_type: "All",
-                    review_count: cluster.review_count || 0,
-                    status: cluster.status === 'fresh_roast' ? 'fresh' : 
-                            cluster.status === 'in_progress' ? 'fixing' : 
-                            cluster.status === 'resolved' ? 'resolved' : 'fresh',
-                  });
-                });
-              } catch (err) {
-                console.error(`Error fetching clusters for upload ${upload.id}:`, err);
-              }
-            }
-            
-            if (allClusters.length > 0) {
-              setTickets(allClusters);
-            }
-          }
-        } catch (error) {
-          console.error('Error fetching uploads:', error);
-        }
+      // Fetch clusters directly from Supabase
+      const { data: clustersData, error: clustersError } = await supabase
+        .from('clusters')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (clustersError) {
+        console.error('Error fetching clusters:', clustersError);
+      } else if (clustersData && clustersData.length > 0) {
+        const clusterTickets: Ticket[] = clustersData.map((cluster: any) => ({
+          id: cluster.id,
+          title: cluster.title,
+          summary: cluster.sample_content?.substring(0, 150) || 'No description available',
+          severity: cluster.severity,
+          cluster_id: cluster.id,
+          app_version: "N/A",
+          device_type: "All",
+          review_count: cluster.review_count || 0,
+          status: cluster.status === 'freshroast' ? 'fresh' : 
+                  cluster.status === 'in_progress' ? 'fixing' : 
+                  cluster.status === 'resolved' ? 'resolved' : 'fresh',
+        }));
+        setTickets(clusterTickets);
       }
 
       // Fetch roast results
@@ -349,10 +228,10 @@ export default function DashboardPage() {
         <div className="mb-4">
           <h2 className="text-xl font-bold text-white">Your Roast History</h2>
           <p className="text-neutral-500 text-sm">
-            {tickets.length > 0 ? `${tickets.length} review${tickets.length !== 1 ? 's' : ''} analyzed` : 'No reviews yet. Start roasting some bad reviews!'}
+            {tickets.length > 0 ? `${tickets.length} review${tickets.length !== 1 ? 's' : ''} analyzed` : 'No reviews yet. Upload a CSV to start roasting!'}
           </p>
         </div>
-        <KanbanBoard tickets={tickets.length > 0 ? tickets : mockTickets} />
+        <KanbanBoard tickets={tickets} />
       </motion.div>
     </div>
   );
