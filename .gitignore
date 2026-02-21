@@ -69,3 +69,22 @@ backend/venv/
 # Logs
 logs/
 *.log
+
+# ChromaDB
+chroma_db/
+
+# Test files and scripts
+test_*.py
+test_*.json
+a.py
+b.py
+n.py
+analyze_*.py
+patch_*.py
+quick_*.py
+split_dataset.py
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
