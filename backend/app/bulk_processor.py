@@ -16,7 +16,7 @@ import faiss
 from sklearn.neighbors import NearestNeighbors
 from sqlmodel import Session, select
 
-from app.bulk_models import BulkJob, Review, Cluster
+from app.bulk_models import BulkJob, Cluster
 from app.bulk_embedding import EmbeddingBackend
 from app.config import config
 
@@ -87,25 +87,21 @@ class BulkProcessor:
             self.session.commit()
             logger.info(f"Loaded {total_rows} reviews")
             
-            # Step 1: Noise filtering (BEFORE DB insert)
+            # Step 1: Noise filtering (in-memory only, no DB insert)
             logger.info("Step 1: Noise filtering (in-memory)")
             kept_indices = self._prefilter_noise_fast(df)
             kept_count = len(kept_indices)
             job.kept_rows = kept_count
             logger.info(f"Kept {kept_count}/{total_rows} reviews after noise filtering")
             
-            # Step 2: Insert only kept reviews into DB
-            logger.info("Step 2: Inserting kept reviews into DB")
+            # Step 2: Extract kept reviews DataFrame (no DB insert!)
             kept_df = df.iloc[kept_indices].reset_index(drop=True)
-            kept_review_ids = self._insert_raw_reviews(job_id, kept_df)
             self.session.commit()
-            logger.info(f"Inserted {len(kept_review_ids)} reviews")
-            
             # Extract texts for kept reviews
             kept_texts = kept_df["content"].tolist()
             
-            # Step 3: Batch embedding (single-process to avoid crashes)
-            logger.info("Step 3: Batch embedding")
+            # Step 2: Batch embedding (single-process to avoid crashes)
+            logger.info("Step 2: Batch embedding")
             embeddings = self.embedding_backend.encode_batch(
                 kept_texts,
                 batch_size=config.BATCH_SIZE,
@@ -113,17 +109,15 @@ class BulkProcessor:
             )
             logger.info(f"Generated embeddings: {embeddings.shape}")
             
-            # Step 4: In-memory clustering
-            logger.info("Step 4: In-memory clustering")
+            # Step 3: In-memory clustering
+            logger.info("Step 3: In-memory clustering")
             cluster_assignments = self._cluster_in_memory(embeddings)
             logger.info(f"Created {len(set(cluster_assignments))} clusters")
             
-            # Step 5: Persist clusters and assignments
-            logger.info("Step 5: Persisting clusters to DB")
+            # Step 4: Persist top priority clusters only (no review inserts!)
+            logger.info("Step 4: Persisting top priority clusters to DB")
             self._persist_clusters(
                 job_id,
-                kept_review_ids,
-                list(range(len(kept_df))),  # Sequential indices after reset
                 kept_df,
                 cluster_assignments,
                 embeddings
@@ -213,49 +207,9 @@ class BulkProcessor:
         
         return df
     
-    def _insert_raw_reviews(self, job_id: UUID, df: pd.DataFrame) -> List[UUID]:
-        """
-        Bulk insert raw reviews into DB (optimized for PostgreSQL).
-        
-        Returns:
-            List of review UUIDs (in same order as df rows)
-        """
-        from uuid import uuid4
-        
-        reviews = []
-        review_ids = []
-        
-        for _, row in df.iterrows():
-            review_id = uuid4()
-            review_ids.append(review_id)
-            
-            review = Review(
-                id=review_id,
-                job_id=job_id,
-                review_id=str(row["reviewId"]),
-                user_name=row.get("userName"),
-                content=row["content"],
-                score=int(row["score"]),
-                thumbs_up_count=int(row.get("thumbsUpCount", 0)) if pd.notna(row.get("thumbsUpCount")) else None,
-                app_version=row.get("appVersion"),
-                is_noise=False,  # Will be set in next step
-            )
-            reviews.append(review)
-        
-        # Bulk insert with periodic flushes for large datasets
-        chunk_size = 5000
-        for i in range(0, len(reviews), chunk_size):
-            chunk = reviews[i:i+chunk_size]
-            self.session.add_all(chunk)
-            if i > 0 and i % 10000 == 0:
-                logger.info(f"Inserted {i}/{len(reviews)} reviews...")
-                self.session.flush()
-        
-        return review_ids
-    
     def _prefilter_noise_fast(self, df: pd.DataFrame) -> List[int]:
         """
-        Filter noise reviews in-memory BEFORE DB insert (fully vectorized).
+        Filter noise reviews in-memory (fully vectorized).
         
         Returns only the indices of kept (non-noise) reviews.
         """
@@ -376,20 +330,16 @@ class BulkProcessor:
     def _persist_clusters(
         self,
         job_id: UUID,
-        review_ids: List[UUID],
-        review_indices: List[int],
         df: pd.DataFrame,
         cluster_assignments: List[int],
         embeddings: np.ndarray
     ):
         """
-        Select top 15 priority clusters (5 high, 5 moderate, 5 low) and persist only those.
+        Select top 15-20 priority clusters and persist only those (no review DB inserts).
         
         Args:
             job_id: Job ID
-            review_ids: List of review UUIDs
-            review_indices: Original df indices for kept reviews
-            df: Original DataFrame
+            df: DataFrame with kept reviews
             cluster_assignments: Cluster ID for each review
             embeddings: Embeddings array
         """
@@ -401,16 +351,15 @@ class BulkProcessor:
         for i, cluster_id in enumerate(cluster_assignments):
             clusters_dict[cluster_id].append(i)
         
-        logger.info(f"Found {len(clusters_dict)} total clusters, selecting top 15 priority clusters...")
+        logger.info(f"Found {len(clusters_dict)} total clusters, selecting top priority clusters...")
         
         # Analyze all clusters and calculate priority scores
         cluster_metadata = []
         
         for cluster_num, review_positions in clusters_dict.items():
-            # Get representative review
+            # Get representative review directly from DataFrame
             rep_pos = review_positions[0]
-            rep_df_idx = review_indices[rep_pos]
-            rep_content = df.iloc[rep_df_idx]["content"]
+            rep_content = df.iloc[rep_pos]["content"]
             
             # Calculate severity
             severity = self._calculate_severity(rep_content)
@@ -440,11 +389,10 @@ class BulkProcessor:
         
         logger.info(f"Selected {len(selected_clusters)} priority clusters for persistence")
         
-        # Persist only selected clusters
+        # Persist only selected clusters (no review_id needed!)
         for meta in selected_clusters:
             cluster_uuid = uuid4()
             title = self._generate_title(meta['rep_content'], meta['severity'])
-            rep_review_id = review_ids[meta['rep_pos']]
             
             cluster = Cluster(
                 id=cluster_uuid,
@@ -453,8 +401,8 @@ class BulkProcessor:
                 severity=meta['severity'],
                 status="freshroast",
                 review_count=meta['review_count'],
-                sample_review_id=rep_review_id,
-                sample_content=meta['rep_content'][:500]
+                sample_review_id=None,  # No review table anymore
+                sample_content=meta['rep_content'][:500]  # Store content directly
             )
             self.session.add(cluster)
         

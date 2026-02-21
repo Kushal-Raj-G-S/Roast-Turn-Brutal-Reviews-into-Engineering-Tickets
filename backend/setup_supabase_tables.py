@@ -1,13 +1,14 @@
 """
 Setup script to create bulk processing tables in Supabase PostgreSQL.
 Run this once to initialize the database schema.
+NO REVIEWS TABLE - we only store clusters!
 """
 
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-# Supabase connection string
-DATABASE_URL = "postgresql://postgres.ovvinemzixqdvbxrvyzs:roastgooglereviewproject@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
+# Supabase connection string (NEW PROJECT)
+DATABASE_URL = "postgresql://postgres.ouxdpbbmvazmtaxeueko:roastgooglereviewproject@aws-1-ap-south-1.pooler.supabase.com:5432/postgres"
 
 def create_tables():
     """Create all tables for bulk processing."""
@@ -21,7 +22,6 @@ def create_tables():
     
     # Drop existing tables if they exist
     cursor.execute("""
-        DROP TABLE IF EXISTS reviews CASCADE;
         DROP TABLE IF EXISTS clusters CASCADE;
         DROP TABLE IF EXISTS bulk_jobs CASCADE;
     """)
@@ -44,7 +44,7 @@ def create_tables():
     """)
     print("✅ Created bulk_jobs table")
     
-    # Create clusters table
+    # Create clusters table (NO reviews table!)
     cursor.execute("""
         CREATE TABLE clusters (
             id UUID PRIMARY KEY,
@@ -66,47 +66,18 @@ def create_tables():
     """)
     print("✅ Created clusters table")
     
-    # Create reviews table
-    cursor.execute("""
-        CREATE TABLE reviews (
-            id UUID PRIMARY KEY,
-            job_id UUID NOT NULL REFERENCES bulk_jobs(id) ON DELETE CASCADE,
-            app_id UUID,
-            review_id VARCHAR(255) NOT NULL,
-            user_name VARCHAR(255),
-            content TEXT NOT NULL,
-            score INTEGER NOT NULL,
-            thumbs_up_count INTEGER,
-            app_version VARCHAR(100),
-            created_at_store TIMESTAMP WITH TIME ZONE,
-            is_noise BOOLEAN DEFAULT FALSE,
-            processed_at TIMESTAMP WITH TIME ZONE,
-            cluster_id UUID REFERENCES clusters(id) ON DELETE SET NULL,
-            version VARCHAR(100),
-            device VARCHAR(100)
-        );
-    """)
-    print("✅ Created reviews table")
+    print("✅ SKIPPED reviews table (not needed - saves 99% storage!)")
     
     # Create indexes for performance
     cursor.execute("""
-        CREATE INDEX idx_reviews_job_id ON reviews(job_id);
-        CREATE INDEX idx_reviews_cluster_id ON reviews(cluster_id);
-        CREATE INDEX idx_reviews_is_noise ON reviews(is_noise);
         CREATE INDEX idx_clusters_job_id ON clusters(job_id);
+        CREATE INDEX idx_clusters_severity ON clusters(severity);
         CREATE INDEX idx_bulk_jobs_status ON bulk_jobs(status);
     """)
     print("✅ Created indexes")
     
-    # Add foreign key for sample_review_id (after reviews table exists)
-    cursor.execute("""
-        ALTER TABLE clusters 
-        ADD CONSTRAINT fk_clusters_sample_review 
-        FOREIGN KEY (sample_review_id) 
-        REFERENCES reviews(id) 
-        ON DELETE SET NULL;
-    """)
-    print("✅ Added foreign key constraints")
+    # No foreign key for sample_review_id since we don't have reviews table
+    # sample_review_id is just a UUID reference stored in cluster.sample_content
     
     cursor.close()
     conn.close()
@@ -116,8 +87,8 @@ def create_tables():
     print("=" * 60)
     print("\nTables created:")
     print("  - bulk_jobs (job tracking)")
-    print("  - clusters (issue clusters/tickets)")
-    print("  - reviews (individual reviews)")
+    print("  - clusters (issue clusters/tickets with sample content)")
+    print("\n❌ NO reviews table (saves 99% storage!)")
     print("\nYou can now run the bulk processing pipeline.")
     print("=" * 60)
 

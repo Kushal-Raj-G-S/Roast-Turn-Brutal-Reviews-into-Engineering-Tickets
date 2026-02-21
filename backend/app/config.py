@@ -12,7 +12,7 @@ class Config:
     # Database
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "postgresql://postgres.ovvinemzixqdvbxrvyzs:roastgooglereviewproject@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
+        "postgresql://postgres.ouxdpbbmvazmtaxeueko:roastgooglereviewproject@aws-1-ap-south-1.pooler.supabase.com:5432/postgres"
     )
     
     # Embedding model
