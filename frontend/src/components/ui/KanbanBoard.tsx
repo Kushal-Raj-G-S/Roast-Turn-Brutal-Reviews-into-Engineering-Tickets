@@ -11,6 +11,7 @@ import { motion, LayoutGroup } from "framer-motion";
 import { Flame, Wrench, CheckCircle2 } from "lucide-react";
 import { TicketCard } from "./TicketCard";
 import { cn } from "@/lib/utils";
+import { useRef, useEffect } from "react";
 
 // Ticket type matching backend schema
 export interface Ticket {
@@ -34,6 +35,15 @@ interface KanbanColumnProps {
 }
 
 function KanbanColumn({ title, icon, color, tickets, className }: KanbanColumnProps) {
+  const hasAnimated = useRef(false);
+
+  useEffect(() => {
+    // Mark as animated after first render
+    if (!hasAnimated.current && tickets.length > 0) {
+      hasAnimated.current = true;
+    }
+  }, [tickets.length]);
+
   const colorStyles = {
     red: {
       border: "border-red-500/30",
@@ -61,8 +71,7 @@ function KanbanColumn({ title, icon, color, tickets, className }: KanbanColumnPr
   const styles = colorStyles[color];
 
   return (
-    <motion.div
-      layout
+    <div
       className={cn(
         "flex flex-col rounded-2xl border backdrop-blur-sm",
         styles.border,
@@ -98,47 +107,30 @@ function KanbanColumn({ title, icon, color, tickets, className }: KanbanColumnPr
 
       {/* Tickets Container */}
       <div className="flex-1 p-3 space-y-3 overflow-y-auto max-h-[calc(100vh-280px)] scrollbar-thin">
-        <LayoutGroup>
-          {tickets.map((ticket, index) => (
-            <motion.div
-              key={ticket.id}
-              layout
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{
-                duration: 0.3,
-                delay: index * 0.05,
-                layout: { type: "spring", stiffness: 300, damping: 30 },
-              }}
-            >
-              <TicketCard
-                id={ticket.id}
-                title={ticket.title}
-                summary={ticket.summary}
-                severity={ticket.severity}
-                version={ticket.app_version}
-                device={ticket.device_type}
-                evidenceCount={ticket.review_count}
-              />
-            </motion.div>
-          ))}
-        </LayoutGroup>
+        {tickets.map((ticket, index) => (
+          <div key={ticket.id}>
+            <TicketCard
+              id={ticket.id}
+              title={ticket.title}
+              summary={ticket.summary}
+              severity={ticket.severity}
+              version={ticket.app_version}
+              device={ticket.device_type}
+              evidenceCount={ticket.review_count}
+            />
+          </div>
+        ))}
 
         {tickets.length === 0 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex flex-col items-center justify-center py-12 text-center"
-          >
+          <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mb-4">
               {icon}
             </div>
             <p className="text-sm text-neutral-500">No tickets here</p>
-          </motion.div>
+          </div>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }
 

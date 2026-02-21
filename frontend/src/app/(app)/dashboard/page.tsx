@@ -13,6 +13,7 @@ import { SpotlightCard } from "@/components/ui";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+import { apiClient, Upload as UploadType, Cluster } from "@/lib/api-client";
 
 interface UserProfile {
   id: string;
@@ -134,7 +135,8 @@ export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [stats, setStats] = useState<UserStats | null>(null);
-  const [roastResults, setRoastResults] = useState<any[]>([]);
+  const [uploads, setUploads] = useState<UploadType[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>(mockTickets); // Start with mock, replace with real data
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -188,6 +190,52 @@ export default function DashboardPage() {
         average_sentiment_score: null,
       });
 
+      // Fetch uploads from backend API
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        apiClient.setToken(session.access_token);
+        
+        try {
+          const uploadsData = await apiClient.getUploads();
+          setUploads(uploadsData);
+          
+          // Convert uploads to tickets for display
+          if (uploadsData.length > 0) {
+            const allClusters: Ticket[] = [];
+            
+            for (const upload of uploadsData.slice(0, 3)) { // Get clusters from first 3 uploads
+              try {
+                const clusters = await apiClient.getUploadClusters(upload.id);
+                
+                clusters.forEach((cluster: Cluster, index: number) => {
+                  allClusters.push({
+                    id: cluster.id.toString(),
+                    title: cluster.title,
+                    summary: `From upload: ${upload.filename}`,
+                    severity: cluster.severity as any,
+                    cluster_id: cluster.cluster_uuid,
+                    app_version: "N/A",
+                    device_type: "All",
+                    review_count: cluster.review_count || 0,
+                    status: cluster.status === 'fresh_roast' ? 'fresh' : 
+                            cluster.status === 'in_progress' ? 'fixing' : 
+                            cluster.status === 'resolved' ? 'resolved' : 'fresh',
+                  });
+                });
+              } catch (err) {
+                console.error(`Error fetching clusters for upload ${upload.id}:`, err);
+              }
+            }
+            
+            if (allClusters.length > 0) {
+              setTickets(allClusters);
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching uploads:', error);
+        }
+      }
+
       // Fetch roast results
       const { data: results, error: resultsError } = await supabase
         .from('roast_results')
@@ -200,7 +248,6 @@ export default function DashboardPage() {
         console.error('Error fetching roast results:', resultsError);
       }
 
-      setRoastResults(results || []);
       setLoading(false);
     } catch (error) {
       console.error('Error:', error);
@@ -255,20 +302,6 @@ export default function DashboardPage() {
     },
   ];
 
-  // Convert roast results to tickets for KanbanBoard
-  const tickets: Ticket[] = roastResults.map((result, index) => ({
-    id: result.id,
-    title: result.review_text.substring(0, 50) + (result.review_text.length > 50 ? '...' : ''),
-    summary: result.roast_summary || result.review_text,
-    severity: result.toxicity_level === 'extreme' ? 'critical' : 
-              result.toxicity_level === 'high' ? 'high' : 
-              result.toxicity_level === 'medium' ? 'medium' : 'low',
-    cluster_id: result.ticket_number || `ticket-${index}`,
-    app_version: "N/A",
-    device_type: "All",
-    review_count: 1,
-    status: result.is_resolved ? 'resolved' : result.status === 'completed' ? 'fixing' : 'fresh',
-  }));
   return (
     <div className="space-y-6">
       {/* Page Header */}

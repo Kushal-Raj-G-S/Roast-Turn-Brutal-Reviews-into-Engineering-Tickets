@@ -7,11 +7,13 @@
  */
 
 import { motion } from "framer-motion";
-import { useState } from "react";
-import { Upload, FileCheck, AlertCircle, ArrowRight } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Upload, FileCheck, AlertCircle, ArrowRight, Loader2 } from "lucide-react";
 import { EmptyState } from "@/components/ui";
 import { SpotlightCard } from "@/components/ui";
 import Link from "next/link";
+import { apiClient } from "@/lib/api-client";
+import { supabase } from "@/lib/supabase/client";
 
 interface UploadResult {
   success: boolean;
@@ -23,45 +25,109 @@ interface UploadResult {
   };
 }
 
+interface ProgressData {
+  upload_id: number;
+  status: string;
+  stage: string;
+  progress: number;
+  total: number;
+  current: number;
+  message: string;
+}
+
 export default function UploadPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [result, setResult] = useState<UploadResult | null>(null);
+  const [uploadId, setUploadId] = useState<number | null>(null);
+  const [progress, setProgress] = useState<ProgressData | null>(null);
+  const pollInterval = useRef<NodeJS.Timeout | null>(null);
+
+  // Poll for progress updates
+  useEffect(() => {
+    if (!uploadId || !isUploading) return;
+
+    const pollProgress = async () => {
+      try {
+        const progressData = await apiClient.getUploadProgress(uploadId);
+        
+        if (progressData) {
+          setProgress(progressData);
+          
+          // Stop polling if completed or failed
+          if (progressData.status === 'completed') {
+            clearInterval(pollInterval.current!);
+            setIsUploading(false);
+            setResult({
+              success: true,
+              message: "Reviews processed successfully!",
+              stats: {
+                total_reviews: progressData.total,
+                clusters_created: 0,
+                tickets_generated: 0,
+              },
+            });
+          } else if (progressData.status === 'failed') {
+            clearInterval(pollInterval.current!);
+            setIsUploading(false);
+            setResult({
+              success: false,
+              message: progressData.message || "Processing failed",
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error polling progress:', error);
+      }
+    };
+
+    // Poll every 2 seconds
+    pollInterval.current = setInterval(pollProgress, 2000);
+    pollProgress(); // Initial poll
+
+    return () => {
+      if (pollInterval.current) {
+        clearInterval(pollInterval.current);
+      }
+    };
+  }, [uploadId, isUploading]);
 
   const handleFileSelect = async (file: File) => {
     setIsUploading(true);
     setResult(null);
+    setProgress(null);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      // Get Supabase session token
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        throw new Error("Please log in to upload files");
+      }
 
-      // TODO: Replace with actual API endpoint
-      // const response = await fetch("http://localhost:8000/ingest", {
-      //   method: "POST",
-      //   body: formData,
-      // });
-      // const data = await response.json();
+      // Set the token for API client
+      apiClient.setToken(session.access_token);
 
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      // Mock success result
-      setResult({
-        success: true,
-        message: "Reviews processed successfully!",
-        stats: {
-          total_reviews: 1247,
-          clusters_created: 23,
-          tickets_generated: 23,
-        },
+      // Upload to backend API (returns immediately with upload record)
+      const upload = await apiClient.uploadCSV(file);
+      
+      // Start polling for progress
+      setUploadId(upload.id);
+      setProgress({
+        upload_id: upload.id,
+        status: 'processing',
+        stage: 'starting',
+        progress: 0,
+        total: upload.total_reviews || 0,
+        current: 0,
+        message: 'Starting to process reviews...'
       });
-    } catch (error) {
+
+    } catch (error: any) {
+      setIsUploading(false);
       setResult({
         success: false,
-        message: "Failed to process file. Please try again.",
+        message: error.message || "Failed to upload file. Please try again.",
       });
-    } finally {
-      setIsUploading(false);
     }
   };
 
@@ -88,7 +154,52 @@ export default function UploadPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
       >
-        {result ? (
+        {isUploading && progress ? (
+          // Progress Card
+          <SpotlightCard className="p-8">
+            <div className="text-center">
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                className="w-20 h-20 rounded-3xl bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center mx-auto mb-6 shadow-lg shadow-orange-500/30"
+              >
+                <Loader2 className="w-10 h-10 text-white" />
+              </motion.div>
+
+              <h2 className="text-2xl font-bold text-white mb-2">
+                Processing Your Reviews
+              </h2>
+              <p className="text-neutral-400 mb-6">
+                {progress.message}
+              </p>
+
+              {/* Progress Bar */}
+              <div className="max-w-md mx-auto mb-6">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm text-neutral-400">{progress.stage}</span>
+                  <span className="text-sm font-bold text-orange-400">{progress.progress}%</span>
+                </div>
+                <div className="h-3 rounded-full bg-white/5 overflow-hidden">
+                  <motion.div
+                    className="h-full bg-gradient-to-r from-orange-500 to-red-600 rounded-full"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${progress.progress}%` }}
+                    transition={{ duration: 0.5 }}
+                  />
+                </div>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-xs text-neutral-500">
+                    {progress.current.toLocaleString()} / {progress.total.toLocaleString()} reviews
+                  </span>
+                </div>
+              </div>
+
+              <p className="text-xs text-neutral-600">
+                This may take a few minutes. You can leave this page and come back later.
+              </p>
+            </div>
+          </SpotlightCard>
+        ) : result ? (
           // Result Card
           <SpotlightCard className="p-8">
             <div className="text-center">

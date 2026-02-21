@@ -25,3 +25,17 @@ transformers>=4.36.0
 
 # Utilities
 python-dotenv>=1.0.0
+
+# Database (PostgreSQL + ORM)
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
+sqlmodel>=0.0.14  # SQLModel for type-safe ORM with Pydantic
+
+# ML/Clustering
+scikit-learn>=1.3.0  # For NearestNeighbors clustering
+
+# Authentication & Security
+supabase>=2.0.0
+python-multipart>=0.0.6
+email-validator>=2.1.0

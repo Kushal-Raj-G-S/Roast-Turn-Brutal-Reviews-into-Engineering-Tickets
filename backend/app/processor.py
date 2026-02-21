@@ -23,7 +23,7 @@ import pandas as pd
 
 from app.schemas import RoastReview, RoastCluster, IngestStats, Severity, TicketStatus
 from app.memory import RoastMemory
-from app.llm import LLMRouter, RCAResult, AllModelsFailedError
+from app.llm_service import get_llm_service
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ class RoastProcessor:
     ]
     
     # Max concurrent LLM calls (rate limit protection)
-    MAX_LLM_CONCURRENCY = 5
+    MAX_LLM_CONCURRENCY = 20  # INCREASED for speed
     
     # Context limits
     MAX_REVIEWS_PER_CLUSTER = 10
@@ -69,28 +69,19 @@ class RoastProcessor:
     
     def __init__(
         self, 
-        memory: Optional[RoastMemory] = None,
-        llm: Optional[LLMRouter] = None
+        memory: Optional[RoastMemory] = None
     ) -> None:
         """
-        Initialize the processor with memory and LLM layers.
+        Initialize the processor with memory layer.
         
         Args:
             memory: RoastMemory instance (created if None)
-            llm: LLMRouter instance (created if None)
         """
         self.memory = memory or RoastMemory()
-        self.llm = llm  # Lazy init to avoid loading model on import
         self.clusters: Dict[str, RoastCluster] = {}
         self._concurrency_limit = asyncio.Semaphore(self.MAX_LLM_CONCURRENCY)
         
         logger.info("RoastProcessor initialized (LLM concurrency: %d)", self.MAX_LLM_CONCURRENCY)
-    
-    def _get_llm(self) -> LLMRouter:
-        """Lazy initialization of LLM router."""
-        if self.llm is None:
-            self.llm = LLMRouter()
-        return self.llm
     
     # =========================================================================
     # NOISE FILTERING
@@ -292,46 +283,51 @@ class RoastProcessor:
             logger.info("Analyzing cluster %s (%d reviews)...", cluster_id, len(cluster.evidence))
             
             try:
-                # Prepare optimized context
-                context = self._prepare_context(cluster.evidence)
+                # Get LLM service (singleton)
+                llm_service = get_llm_service()
                 
-                if not context:
-                    logger.warning("Cluster %s has no usable context, skipping AI", cluster_id)
-                    return cluster
+                # Prepare review data for LLM
+                reviews_data = [
+                    {
+                        "content": r.original_text,
+                        "rating": r.rating,
+                        "date": r.timestamp.isoformat() if r.timestamp else None
+                    }
+                    for r in cluster.evidence
+                ]
                 
-                # Call LLM
-                llm = self._get_llm()
-                rca: RCAResult = await llm.generate_rca(context)
-                
-                # Update cluster with RCA results
-                cluster.rca_title = rca.ticket_title
-                cluster.title = rca.ticket_title  # Update main title
-                cluster.rca_hypothesis = rca.root_cause_hypothesis
-                cluster.rca_steps = rca.reproduction_steps
-                cluster.rca_fix = rca.suggested_fix
-                cluster.ai_analyzed = True
-                
-                # Map priority to severity
-                priority_map = {
-                    "Critical": Severity.CRITICAL,
-                    "High": Severity.HIGH,
-                    "Medium": Severity.MEDIUM,
-                    "Low": Severity.LOW,
+                # Collect metadata
+                metadata = {
+                    "versions": list(set(r.version for r in cluster.evidence if r.version)),
+                    "devices": list(set(r.device for r in cluster.evidence if r.device))
                 }
-                cluster.severity = priority_map.get(rca.technical_priority, Severity.MEDIUM)
                 
-                logger.info("✓ Cluster %s analyzed: %s", cluster_id, rca.ticket_title[:50])
+                # Call LLM with cascading fallback
+                rca_result = await llm_service.generate_rca(
+                    reviews=reviews_data,
+                    severity=cluster.severity.value,
+                    metadata=metadata
+                )
                 
-            except AllModelsFailedError as e:
-                logger.error("✗ Cluster %s: All LLM models failed: %s", cluster_id, e)
-                # Set fallback values
-                device = cluster.evidence[0].device if cluster.evidence else "General"
-                cluster.title = f"Unanalyzed Issue ({device or 'General'})"
-                cluster.ai_analyzed = False
+                if rca_result:
+                    # Update cluster with RCA results
+                    cluster.rca_title = rca_result["rca_title"]
+                    cluster.title = rca_result["rca_title"]  # Update main title
+                    cluster.rca_hypothesis = rca_result["rca_hypothesis"]
+                    cluster.rca_steps = rca_result["rca_steps"]
+                    cluster.rca_fix = rca_result["rca_fix"]
+                    cluster.ai_analyzed = True
+                    
+                    logger.info("✓ Cluster %s analyzed: %s", cluster_id, cluster.rca_title[:50])
+                else:
+                    # Graceful fallback already provided by LLM service
+                    logger.warning("⚠ Cluster %s: Using graceful fallback", cluster_id)
+                    cluster.ai_analyzed = False
                 
             except Exception as e:
                 logger.exception("✗ Cluster %s: Unexpected error during analysis: %s", cluster_id, e)
-                cluster.title = f"Unanalyzed Issue (Error)"
+                device = cluster.evidence[0].device if cluster.evidence else "General"
+                cluster.title = f"Unanalyzed Issue ({device or 'General'})"
                 cluster.ai_analyzed = False
         
         return cluster

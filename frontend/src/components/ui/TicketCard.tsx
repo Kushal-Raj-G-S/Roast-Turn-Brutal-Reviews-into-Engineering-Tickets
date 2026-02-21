@@ -79,8 +79,7 @@ export function TicketCard({
   const config = severityConfig[severity];
 
   return (
-    <motion.div
-      layoutId={`ticket-${id}`}
+    <div
       className={cn(
         "group cursor-pointer rounded-xl border-l-4 bg-black/30 backdrop-blur-xl",
         "border border-white/5 hover:border-white/10 transition-all duration-200",
@@ -89,12 +88,6 @@ export function TicketCard({
         className
       )}
       onClick={onClick}
-      whileHover={{ scale: 1.01, x: 4 }}
-      whileTap={{ scale: 0.99 }}
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 20 }}
-      transition={{ type: "spring", stiffness: 300, damping: 25 }}
     >
       <div className="p-4 space-y-3">
         {/* Header: Severity + Metadata */}
@@ -124,9 +117,9 @@ export function TicketCard({
           )}
         </div>
 
-        {/* Title with scramble effect */}
+        {/* Title */}
         <h3 className="font-semibold text-white group-hover:text-orange-400 transition-colors line-clamp-2">
-          <TextReveal text={title} trigger={true} />
+          {title}
         </h3>
 
         {/* Summary (truncated) */}
@@ -144,14 +137,14 @@ export function TicketCard({
           </div>
           
           {severity === "critical" && (
-            <div className="flex items-center gap-1 text-red-500 animate-pulse">
+            <div className="flex items-center gap-1 text-red-500">
               <AlertTriangle className="w-4 h-4" />
               <span className="text-xs font-medium">Urgent</span>
             </div>
           )}
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
