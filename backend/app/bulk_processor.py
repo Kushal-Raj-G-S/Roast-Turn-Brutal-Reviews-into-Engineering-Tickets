@@ -16,7 +16,7 @@ import faiss
 from sklearn.neighbors import NearestNeighbors
 from sqlmodel import Session, select
 
-from app.bulk_models import BulkJob, Cluster
+from app.bulk_models import Upload, Cluster
 from app.bulk_embedding import EmbeddingBackend
 from app.config import config
 
@@ -56,34 +56,34 @@ class BulkProcessor:
         self.session = session
         self.embedding_backend = embedding_backend or EmbeddingBackend()
     
-    def process_bulk_job(self, job_id: UUID, csv_path: str) -> Dict:
+    def process_bulk_job(self, upload_id: int, csv_path: str) -> Dict:
         """
-        Process a bulk job end-to-end.
+        Process a bulk upload end-to-end.
         
         Args:
-            job_id: ID of the BulkJob
+            upload_id: ID of the Upload
             csv_path: Path to CSV file
         
         Returns:
             Stats dict with processing metrics
         """
-        logger.info(f"Starting bulk job {job_id} from {csv_path}")
+        logger.info(f"Starting bulk upload {upload_id} from {csv_path}")
         start_time = datetime.utcnow()
         
         try:
-            # Get job
-            job = self.session.get(BulkJob, job_id)
-            if not job:
-                raise ValueError(f"Job {job_id} not found")
+            # Get upload record
+            upload = self.session.get(Upload, upload_id)
+            if not upload:
+                raise ValueError(f"Upload {upload_id} not found")
             
-            job.status = "RUNNING"
+            upload.status = "processing"
             self.session.commit()
             
             # Step 0: Load CSV
             logger.info("Step 0: Loading CSV")
             df = self._load_csv(csv_path)
             total_rows = len(df)
-            job.total_rows = total_rows
+            upload.total_reviews = total_rows
             self.session.commit()
             logger.info(f"Loaded {total_rows} reviews")
             
@@ -91,7 +91,7 @@ class BulkProcessor:
             logger.info("Step 1: Noise filtering (in-memory)")
             kept_indices = self._prefilter_noise_fast(df)
             kept_count = len(kept_indices)
-            job.kept_rows = kept_count
+            upload.filtered_noise = total_rows - kept_count
             logger.info(f"Kept {kept_count}/{total_rows} reviews after noise filtering")
             
             # Step 2: Extract kept reviews DataFrame (no DB insert!)
@@ -117,42 +117,43 @@ class BulkProcessor:
             # Step 4: Persist top priority clusters only (no review inserts!)
             logger.info("Step 4: Persisting top priority clusters to DB")
             self._persist_clusters(
-                job_id,
+                upload_id,
                 kept_df,
                 cluster_assignments,
                 embeddings
             )
-            job.cluster_count = len(set(cluster_assignments))
-            job.processed_rows = total_rows
+            upload.clusters_created = len(set(cluster_assignments))
+            upload.processed_reviews = total_rows
             self.session.commit()
             logger.info("Clusters persisted")
             
-            # Mark job complete
-            job.status = "COMPLETED"
-            job.updated_at = datetime.utcnow()
+            # Mark upload complete
+            upload.status = "completed"
+            upload.completed_at = datetime.utcnow()
+            upload.processing_time_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
             self.session.commit()
             
             elapsed = (datetime.utcnow() - start_time).total_seconds()
-            logger.info(f"Bulk job {job_id} completed in {elapsed:.2f}s")
+            logger.info(f"Bulk upload {upload_id} completed in {elapsed:.2f}s")
             
             return {
-                "job_id": str(job_id),
-                "status": "COMPLETED",
+                "upload_id": upload_id,
+                "status": "completed",
                 "total_rows": total_rows,
                 "kept_rows": kept_count,
-                "cluster_count": job.cluster_count,
+                "cluster_count": upload.clusters_created,
                 "elapsed_seconds": elapsed
             }
         
         except Exception as e:
-            logger.error(f"Bulk job {job_id} failed: {e}", exc_info=True)
+            logger.error(f"Bulk upload {upload_id} failed: {e}", exc_info=True)
             
-            # Mark job as failed
-            job = self.session.get(BulkJob, job_id)
-            if job:
-                job.status = "FAILED"
-                job.error_message = str(e)[:500]  # Truncate
-                job.updated_at = datetime.utcnow()
+            # Mark upload as failed
+            upload = self.session.get(Upload, upload_id)
+            if upload:
+                upload.status = "failed"
+                upload.error_message = str(e)[:500]  # Truncate
+                upload.completed_at = datetime.utcnow()
                 self.session.commit()
             
             raise
@@ -329,7 +330,7 @@ class BulkProcessor:
     
     def _persist_clusters(
         self,
-        job_id: UUID,
+        upload_id: int,
         df: pd.DataFrame,
         cluster_assignments: List[int],
         embeddings: np.ndarray
@@ -338,7 +339,7 @@ class BulkProcessor:
         Select top 15-20 priority clusters and persist only those (no review DB inserts).
         
         Args:
-            job_id: Job ID
+            upload_id: Upload ID
             df: DataFrame with kept reviews
             cluster_assignments: Cluster ID for each review
             embeddings: Embeddings array
@@ -391,23 +392,47 @@ class BulkProcessor:
         
         # Persist only selected clusters (no review_id needed!)
         for meta in selected_clusters:
-            cluster_uuid = uuid4()
+            cluster_uuid = str(uuid4())
             title = self._generate_title(meta['rep_content'], meta['severity'])
             
+            # Get sample reviews (up to 20) for this cluster
+            review_positions = meta['review_positions'][:20]  # Limit to 20
+            sample_reviews = []
+            for pos in review_positions:
+                review_row = df.iloc[pos]
+                
+                # Helper function to safely get value or None (handles NaN)
+                def safe_get(row, key, default=''):
+                    val = row.get(key, default)
+                    # Check for NaN (pandas NaN values)
+                    if pd.isna(val):
+                        return None if default == '' else default
+                    # Convert empty strings to None for cleaner JSON
+                    if val == '':
+                        return None
+                    return str(val)
+                
+                sample_reviews.append({
+                    'content': str(review_row['content']),
+                    'rating': int(review_row.get('score', 0)) if pd.notna(review_row.get('score')) else None,
+                    'date': safe_get(review_row, 'at'),
+                    'version': safe_get(review_row, 'appVersion'),
+                    'device': self._extract_device(review_row['content'])
+                })
+            
             cluster = Cluster(
-                id=cluster_uuid,
-                job_id=job_id,
+                upload_id=upload_id,
+                cluster_uuid=cluster_uuid,
                 title=title,
                 severity=meta['severity'],
-                status="freshroast",
+                status="fresh_roast",
                 review_count=meta['review_count'],
-                sample_review_id=None,  # No review table anymore
-                sample_content=meta['rep_content'][:500]  # Store content directly
+                sample_reviews=sample_reviews
             )
             self.session.add(cluster)
         
         self.session.flush()
-        logger.info(f"Persisted {len(selected_clusters)} priority clusters successfully")
+        logger.info(f"Persisted {len(selected_clusters)} priority clusters with sample reviews")
     
     def _calculate_severity(self, text: str) -> str:
         """

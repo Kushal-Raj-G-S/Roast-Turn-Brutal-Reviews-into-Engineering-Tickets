@@ -5,11 +5,12 @@ Polls for PENDING jobs and processes them using BulkProcessor.
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 from sqlmodel import Session, select
 
-from app.bulk_models import BulkJob, get_engine, get_session
+from app.bulk_models import Upload, get_engine, get_session
 from app.bulk_processor import BulkProcessor
 from app.bulk_embedding import EmbeddingBackend
 from app.config import config
@@ -67,49 +68,70 @@ class BulkWorker:
         This is run in the asyncio event loop but uses synchronous DB operations
         since SQLModel/SQLAlchemy doesn't require async for our use case.
         """
+        # Use a separate session just for finding pending jobs
         with Session(self.engine) as session:
             # Find pending jobs
-            statement = select(BulkJob).where(BulkJob.status == "PENDING").limit(1)
+            statement = select(Upload).where(Upload.status == "pending").limit(1)
             job = session.exec(statement).first()
             
             if not job:
                 return  # No pending jobs
             
-            logger.info(f"Found pending job {job.id}")
+            job_id = job.id
+            logger.info(f"Found pending upload {job_id}")
+        
+        # Initialize embedding backend if needed
+        self._init_embedding_backend()
+        
+        # Get CSV path
+        csv_path = Path(config.UPLOAD_DIR) / f"{job_id}.csv"
+        
+        if not csv_path.exists():
+            # Use a new session for error handling
+            with Session(self.engine) as session:
+                job = session.get(Upload, job_id)
+                if job:
+                    logger.error(f"CSV file not found for upload {job_id}: {csv_path}")
+                    job.status = "failed"
+                    job.error_message = f"CSV file not found: {csv_path}"
+                    session.commit()
+            return
+        
+        # Process upload (processor will manage its own session)
+        try:
+            # Track processing time
+            start_time = time.time()
             
-            # Initialize embedding backend if needed
-            self._init_embedding_backend()
-            
-            # Get CSV path
-            csv_path = Path(config.UPLOAD_DIR) / f"{job.id}.csv"
-            
-            if not csv_path.exists():
-                logger.error(f"CSV file not found for job {job.id}: {csv_path}")
-                job.status = "FAILED"
-                job.error_message = f"CSV file not found: {csv_path}"
-                session.commit()
-                return
-            
-            # Process job (this will update job status)
-            try:
-                # Create processor with session
+            # Create a new session for the processor
+            with Session(self.engine) as processor_session:
+                # Create processor with its own session
                 processor = BulkProcessor(
-                    session=session,
+                    session=processor_session,
                     embedding_backend=self.embedding_backend
                 )
                 
-                # Process job (runs synchronously)
+                # Process upload (runs synchronously)
                 await asyncio.to_thread(
                     processor.process_bulk_job,
-                    job.id,
+                    job_id,
                     str(csv_path)
                 )
-                
-                logger.info(f"Job {job.id} completed successfully")
             
-            except Exception as e:
-                logger.error(f"Job {job.id} failed: {e}", exc_info=True)
-                # Error already logged in processor
+            # Calculate processing time
+            processing_time = time.time() - start_time
+            
+            # Update processing time
+            with Session(self.engine) as session:
+                job = session.get(Upload, job_id)
+                if job:
+                    job.processing_time_seconds = round(processing_time, 2)
+                    session.commit()
+            
+            logger.info(f"✓ Upload {job_id} completed in {processing_time:.2f}s")
+        
+        except Exception as e:
+            logger.error(f"Upload {job_id} failed: {e}", exc_info=True)
+            # Error already logged in processor
 
 
 # Global worker instance

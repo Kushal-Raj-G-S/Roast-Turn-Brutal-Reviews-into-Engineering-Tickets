@@ -7,13 +7,12 @@
  */
 
 import { motion } from "framer-motion";
-import { Flame, TrendingUp, Clock, CheckCircle2, LogOut, User } from "lucide-react";
+import { Flame, TrendingUp, Clock, CheckCircle2, Database, AlertTriangle } from "lucide-react";
 import { KanbanBoard, Ticket } from "@/components/ui";
 import { SpotlightCard } from "@/components/ui";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
-import { apiClient, Upload as UploadType, Cluster } from "@/lib/api-client";
 
 interface UserProfile {
   id: string;
@@ -23,19 +22,22 @@ interface UserProfile {
   provider: string | null;
 }
 
-interface UserStats {
+interface DashboardStats {
   total_reviews_analyzed: number;
-  total_issues_found: number;
-  total_issues_resolved: number;
-  average_sentiment_score: number | null;
+  total_uploads: number;
+  total_clusters: number;
+  critical_issues: number;
+  high_issues: number;
+  medium_issues: number;
+  low_issues: number;
+  resolved_issues: number;
 }
 
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserProfile | null>(null);
-  const [stats, setStats] = useState<UserStats | null>(null);
-  const [uploads, setUploads] = useState<UploadType[]>([]);
-  const [tickets, setTickets] = useState<Ticket[]>([]); // Real data from Supabase
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -52,18 +54,8 @@ export default function DashboardPage() {
         return;
       }
 
-      // Fetch user profile
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', authUser.id)
-        .single();
-
-      if (profileError && profileError.code !== 'PGRST116') {
-        console.error('Error fetching profile:', profileError);
-      }
-
-      setUser(profile || {
+      // Set user profile
+      setUser({
         id: authUser.id,
         email: authUser.email!,
         full_name: authUser.user_metadata?.full_name || null,
@@ -71,72 +63,77 @@ export default function DashboardPage() {
         provider: authUser.app_metadata?.provider || null,
       });
 
-      // Fetch user statistics
-      const { data: userStats, error: statsError } = await supabase
-        .from('user_statistics')
+      // Fetch user's uploads
+      const { data: uploads, error: uploadsError } = await supabase
+        .from('uploads')
         .select('*')
         .eq('user_id', authUser.id)
-        .single();
+        .eq('status', 'completed');
 
-      if (statsError && statsError.code !== 'PGRST116') {
-        console.error('Error fetching stats:', statsError);
+      if (uploadsError) {
+        console.error('Error fetching uploads:', uploadsError);
       }
 
-      setStats(userStats || {
-        total_reviews_analyzed: 0,
-        total_issues_found: 0,
-        total_issues_resolved: 0,
-        average_sentiment_score: null,
+      const totalReviews = uploads?.reduce((sum, u) => sum + (u.total_reviews || 0), 0) || 0;
+      const totalUploads = uploads?.length || 0;
+
+      // Fetch clusters for user's uploads
+      let allClusters: any[] = [];
+      if (uploads && uploads.length > 0) {
+        const uploadIds = uploads.map(u => u.id);
+        
+        const { data: clustersData, error: clustersError } = await supabase
+          .from('clusters')
+          .select('*')
+          .in('upload_id', uploadIds)
+          .order('created_at', { ascending: false });
+
+        if (clustersError) {
+          console.error('Error fetching clusters:', clustersError);
+        } else {
+          allClusters = clustersData || [];
+        }
+      }
+
+      // Calculate stats from clusters
+      const criticalCount = allClusters.filter(c => c.severity === 'critical').length;
+      const highCount = allClusters.filter(c => c.severity === 'high').length;
+      const mediumCount = allClusters.filter(c => c.severity === 'medium').length;
+      const lowCount = allClusters.filter(c => c.severity === 'low').length;
+      const resolvedCount = allClusters.filter(c => c.status === 'resolved').length;
+
+      setStats({
+        total_reviews_analyzed: totalReviews,
+        total_uploads: totalUploads,
+        total_clusters: allClusters.length,
+        critical_issues: criticalCount,
+        high_issues: highCount,
+        medium_issues: mediumCount,
+        low_issues: lowCount,
+        resolved_issues: resolvedCount,
       });
 
-      // Fetch clusters directly from Supabase
-      const { data: clustersData, error: clustersError } = await supabase
-        .from('clusters')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(20);
-
-      if (clustersError) {
-        console.error('Error fetching clusters:', clustersError);
-      } else if (clustersData && clustersData.length > 0) {
-        const clusterTickets: Ticket[] = clustersData.map((cluster: any) => ({
-          id: cluster.id,
-          title: cluster.title,
-          summary: cluster.sample_content?.substring(0, 150) || 'No description available',
-          severity: cluster.severity,
-          cluster_id: cluster.id,
-          app_version: "N/A",
-          device_type: "All",
-          review_count: cluster.review_count || 0,
-          status: cluster.status === 'freshroast' ? 'fresh' : 
-                  cluster.status === 'in_progress' ? 'fixing' : 
-                  cluster.status === 'resolved' ? 'resolved' : 'fresh',
-        }));
-        setTickets(clusterTickets);
-      }
-
-      // Fetch roast results
-      const { data: results, error: resultsError } = await supabase
-        .from('roast_results')
-        .select('*')
-        .eq('user_id', authUser.id)
-        .order('created_at', { ascending: false })
-        .limit(10);
-
-      if (resultsError) {
-        console.error('Error fetching roast results:', resultsError);
-      }
-
+      // Convert clusters to tickets for Kanban board
+      const clusterTickets: Ticket[] = allClusters.slice(0, 50).map((cluster: any) => ({
+        id: cluster.id,
+        title: cluster.title,
+        summary: cluster.rca_hypothesis || 'No description available',
+        severity: cluster.severity,
+        cluster_id: cluster.id,
+        app_version: "N/A",
+        device_type: "All",
+        review_count: cluster.review_count || 0,
+        status: cluster.status === 'fresh_roast' ? 'fresh' : 
+                cluster.status === 'in_progress' ? 'fixing' : 
+                cluster.status === 'resolved' ? 'resolved' : 'fresh',
+      }));
+      
+      setTickets(clusterTickets);
       setLoading(false);
     } catch (error) {
       console.error('Error:', error);
       setLoading(false);
     }
-  };
-
-  const handleSignOut = async () => {
-    await fetch('/api/auth/signout', { method: 'POST' });
-    router.push('/');
   };
 
   if (loading) {
@@ -153,45 +150,50 @@ export default function DashboardPage() {
   const dashboardStats = [
     {
       title: "Reviews Analyzed",
-      value: stats?.total_reviews_analyzed?.toString() || "0",
-      change: "All time",
-      icon: Flame,
+      value: stats?.total_reviews_analyzed?.toLocaleString() || "0",
+      change: `${stats?.total_uploads || 0} upload${stats?.total_uploads !== 1 ? 's' : ''}`,
+      icon: Database,
       color: "from-red-500 to-orange-600",
     },
     {
       title: "Issues Found",
-      value: stats?.total_issues_found?.toString() || "0",
-      change: "Total detected",
-      icon: Clock,
+      value: stats?.total_clusters?.toString() || "0",
+      change: `${stats?.critical_issues || 0} critical`,
+      icon: AlertTriangle,
       color: "from-orange-500 to-amber-500",
     },
     {
       title: "Issues Resolved",
-      value: stats?.total_issues_resolved?.toString() || "0",
-      change: `${stats?.total_issues_found ? Math.round((stats.total_issues_resolved / stats.total_issues_found) * 100) : 0}% success`,
+      value: stats?.resolved_issues?.toString() || "0",
+      change: `${stats?.total_clusters && stats?.total_clusters > 0 ? Math.round((stats.resolved_issues / stats.total_clusters) * 100) : 0}% complete`,
       icon: CheckCircle2,
       color: "from-emerald-500 to-green-600",
     },
     {
-      title: "Avg Sentiment",
-      value: stats?.average_sentiment_score?.toFixed(2) || "N/A",
-      change: "Overall score",
+      title: "Severity Breakdown",
+      value: `${stats?.high_issues || 0}H ${stats?.medium_issues || 0}M ${stats?.low_issues || 0}L`,
+      change: "Distribution",
       icon: TrendingUp,
       color: "from-blue-500 to-cyan-500",
     },
   ];
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
+    <div className="min-h-screen p-8 space-y-8">
+      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
+        className="flex items-center justify-between"
       >
-        <h1 className="text-2xl font-bold text-white">
-          Welcome back, {user?.full_name || user?.email?.split('@')[0] || 'User'}! 👋
-        </h1>
-        <p className="text-neutral-500">Track and manage your roasted reviews</p>
+        <div>
+          <h1 className="text-3xl font-bold text-white mb-2">
+            Dashboard
+          </h1>
+          <p className="text-neutral-400">
+            Welcome back, {user?.full_name || user?.email || 'User'}! 🔥
+          </p>
+        </div>
       </motion.div>
 
       {/* Stats Grid */}
@@ -225,11 +227,34 @@ export default function DashboardPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.2 }}
       >
-        <div className="mb-4">
-          <h2 className="text-xl font-bold text-white">Your Roast History</h2>
-          <p className="text-neutral-500 text-sm">
-            {tickets.length > 0 ? `${tickets.length} review${tickets.length !== 1 ? 's' : ''} analyzed` : 'No reviews yet. Upload a CSV to start roasting!'}
-          </p>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <Flame className="w-5 h-5 text-orange-500" />
+              Your Roast History
+            </h2>
+            <p className="text-neutral-500 text-sm mt-1">
+              {tickets.length > 0 ? (
+                <>
+                  {tickets.length} issue{tickets.length !== 1 ? 's' : ''} found • 
+                  <span className="text-red-500 ml-1">{stats?.critical_issues || 0} critical</span>
+                  <span className="text-orange-500 ml-1">• {stats?.high_issues || 0} high</span>
+                  <span className="text-yellow-500 ml-1">• {stats?.medium_issues || 0} medium</span>
+                  <span className="text-blue-500 ml-1">• {stats?.low_issues || 0} low</span>
+                </>
+              ) : (
+                'No reviews yet. Upload a CSV to start roasting! 🔥'
+              )}
+            </p>
+          </div>
+          {tickets.length > 0 && (
+            <button
+              onClick={() => router.push('/clusters')}
+              className="px-4 py-2 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 text-white font-medium hover:from-orange-600 hover:to-red-700 transition-all"
+            >
+              View All Datasets
+            </button>
+          )}
         </div>
         <KanbanBoard tickets={tickets} />
       </motion.div>

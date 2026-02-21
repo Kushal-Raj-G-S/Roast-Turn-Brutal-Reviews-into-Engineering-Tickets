@@ -14,12 +14,10 @@ from sqlmodel import Session, select
 
 from app.bulk_models import Upload, Cluster
 from app.config import config
-from app.auth_supabase import get_current_user
-from app.models_supabase import Profile
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="", tags=["bulk"])
+router = APIRouter(prefix="/api/v1", tags=["bulk"])
 
 
 # Response models
@@ -41,7 +39,6 @@ class UploadStatusResponse(BaseModel):
     clusters_created: Optional[int] = None
     ai_analyzed_count: Optional[int] = None
     processing_time_ms: Optional[int] = None
-    processing_time_seconds: Optional[float] = None
     error_message: Optional[str] = None
     created_at: str
     completed_at: Optional[str] = None
@@ -65,24 +62,6 @@ class ClusterResponse(BaseModel):
     created_at: str
 
 
-class ClusterDetailResponse(BaseModel):
-    """Response for cluster with full reviews."""
-    id: int
-    title: str
-    severity: str
-    status: str
-    review_count: int
-    rca_title: Optional[str] = None
-    rca_hypothesis: Optional[str] = None
-    rca_steps: Optional[str] = None
-    rca_fix: Optional[str] = None
-    affected_versions: Optional[list[str]] = None
-    affected_devices: Optional[list[str]] = None
-    keywords: Optional[list[str]] = None
-    sample_reviews: Optional[list[dict]] = None
-    created_at: str
-
-
 # Dependency to get DB session
 def get_db_session():
     """Get database session for dependency injection."""
@@ -97,8 +76,7 @@ def get_db_session():
 @router.post("/upload", response_model=UploadResponse)
 async def bulk_upload(
     file: UploadFile = File(...),
-    session: Session = Depends(get_db_session),
-    user: Profile = Depends(get_current_user)
+    session: Session = Depends(get_db_session)
 ):
     """
     Upload a CSV file for bulk processing.
@@ -109,7 +87,6 @@ async def bulk_upload(
     Args:
         file: CSV file with reviews
         session: Database session
-        user: Authenticated user
     
     Returns:
         UploadResponse with upload_id
@@ -134,12 +111,17 @@ async def bulk_upload(
         # Create upload directory
         config.ensure_upload_dir()
         
-        # Create upload record with authenticated user
+        # TODO: Get user_id from authentication
+        # For now, use a dummy UUID (this should come from auth)
+        from uuid import uuid4
+        dummy_user_id = uuid4()
+        
+        # Create upload record
         upload = Upload(
-            user_id=user.id,
+            user_id=dummy_user_id,
             filename=file.filename,
             file_size_bytes=file_size_bytes,
-            status="pending"
+            status="PENDING"
         )
         session.add(upload)
         session.commit()
@@ -155,7 +137,7 @@ async def bulk_upload(
         
         return UploadResponse(
             upload_id=upload.id,
-            status="pending",
+            status="PENDING",
             message=f"Upload created successfully. Processing will start shortly."
         )
     
@@ -196,7 +178,6 @@ async def get_upload_status(
         clusters_created=upload.clusters_created,
         ai_analyzed_count=upload.ai_analyzed_count,
         processing_time_ms=upload.processing_time_ms,
-        processing_time_seconds=upload.processing_time_seconds,
         error_message=upload.error_message,
         created_at=upload.created_at.isoformat(),
         completed_at=upload.completed_at.isoformat() if upload.completed_at else None
@@ -245,7 +226,6 @@ async def list_uploads(
                 clusters_created=u.clusters_created,
                 ai_analyzed_count=u.ai_analyzed_count,
                 processing_time_ms=u.processing_time_ms,
-                processing_time_seconds=u.processing_time_seconds,
                 error_message=u.error_message,
                 created_at=u.created_at.isoformat(),
                 completed_at=u.completed_at.isoformat() if u.completed_at else None
@@ -297,41 +277,3 @@ async def get_upload_clusters(
         )
         for c in clusters
     ]
-
-
-@router.get("/clusters/{cluster_id}", response_model=ClusterDetailResponse)
-async def get_cluster_details(
-    cluster_id: int,
-    session: Session = Depends(get_db_session)
-):
-    """
-    Get detailed information about a cluster including full sample reviews.
-    
-    Args:
-        cluster_id: Cluster ID
-        session: Database session
-    
-    Returns:
-        ClusterDetailResponse with full reviews
-    """
-    # Get cluster
-    cluster = session.get(Cluster, cluster_id)
-    if not cluster:
-        raise HTTPException(status_code=404, detail="Cluster not found")
-    
-    return ClusterDetailResponse(
-        id=cluster.id,
-        title=cluster.title,
-        severity=cluster.severity,
-        status=cluster.status,
-        review_count=cluster.review_count,
-        rca_title=cluster.rca_title,
-        rca_hypothesis=cluster.rca_hypothesis,
-        rca_steps=cluster.rca_steps,
-        rca_fix=cluster.rca_fix,
-        affected_versions=cluster.affected_versions,
-        affected_devices=cluster.affected_devices,
-        keywords=cluster.keywords,
-        sample_reviews=cluster.sample_reviews,
-        created_at=cluster.created_at.isoformat()
-    )

@@ -45,17 +45,6 @@ def init_bulk_api(app: FastAPI):
     # Include bulk routes
     app.include_router(bulk_router)
     logger.info("Bulk API routes registered")
-    
-    # Start background worker
-    @app.on_event("startup")
-    async def startup_event():
-        logger.info("Starting bulk processing worker")
-        await start_worker(engine)
-    
-    @app.on_event("shutdown")
-    async def shutdown_event():
-        logger.info("Shutting down bulk processing worker")
-        stop_worker()
 
 
 def get_engine_instance():

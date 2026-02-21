@@ -74,11 +74,11 @@ class EmbeddingBackend:
             texts,
             batch_size=batch_size,
             convert_to_numpy=True,
-            show_progress_bar=show_progress,
+            show_progress_bar=False,  # Disable progress bar to clean up terminal
             normalize_embeddings=False  # We'll use cosine distance in clustering
         )
         
-        logger.info(f"Encoded {len(texts)} texts → shape {embeddings.shape}")
+        logger.info(f"✓ Encoded {len(texts)} texts successfully → shape {embeddings.shape}")
         return embeddings
     
     def encode_parallel(

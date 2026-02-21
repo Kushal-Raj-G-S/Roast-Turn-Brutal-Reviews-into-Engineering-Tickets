@@ -4,21 +4,20 @@ Uses the 'uploads' and 'clusters' tables created in Supabase.
 """
 
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional
 from uuid import UUID
 
 from sqlmodel import Field, SQLModel, create_engine, Session, select
-from sqlalchemy import Column, DateTime, func, Integer, JSON
+from sqlalchemy import Column, DateTime, func, Integer
 
 
 class Upload(SQLModel, table=True):
     """Represents a CSV upload job."""
     
     __tablename__ = "uploads"
-    __table_args__ = {'extend_existing': True}
     
     id: Optional[int] = Field(default=None, primary_key=True, sa_column_kwargs={"autoincrement": True})
-    user_id: UUID
+    user_id: UUID = Field(foreign_key="profiles.id")
     filename: str
     file_size_bytes: Optional[int] = Field(default=None)
     total_reviews: Optional[int] = Field(default=None)
@@ -29,7 +28,6 @@ class Upload(SQLModel, table=True):
     clusters_created: Optional[int] = Field(default=None)
     ai_analyzed_count: Optional[int] = Field(default=None)
     processing_time_ms: Optional[int] = Field(default=None)
-    processing_time_seconds: Optional[float] = Field(default=None)
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
@@ -41,10 +39,9 @@ class Cluster(SQLModel, table=True):
     """Represents a group of similar reviews (issue cluster/ticket)."""
     
     __tablename__ = "clusters"
-    __table_args__ = {'extend_existing': True}
     
     id: Optional[int] = Field(default=None, primary_key=True, sa_column_kwargs={"autoincrement": True})
-    upload_id: int = Field(index=True)
+    upload_id: int = Field(foreign_key="uploads.id", index=True)
     cluster_uuid: str = Field(unique=True, index=True)
     
     title: str
@@ -55,10 +52,9 @@ class Cluster(SQLModel, table=True):
     rca_steps: Optional[str] = Field(default=None)
     rca_fix: Optional[str] = Field(default=None)
     ai_analyzed: Optional[bool] = Field(default=None)
-    affected_versions: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
-    affected_devices: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
-    keywords: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
-    sample_reviews: Optional[List[Dict[str, Any]]] = Field(default=None, sa_column=Column(JSON))
+    affected_versions: Optional[str] = Field(default=None)  # JSON string
+    affected_devices: Optional[str] = Field(default=None)   # JSON string
+    keywords: Optional[str] = Field(default=None)           # JSON string
     review_count: int = Field(default=0)
     assigned_to: Optional[str] = Field(default=None)
     assigned_at: Optional[datetime] = Field(default=None)
@@ -75,10 +71,9 @@ class Review(SQLModel, table=True):
     """Individual review records (optional - not used in optimized bulk processor)."""
     
     __tablename__ = "reviews"
-    __table_args__ = {'extend_existing': True}
     
     id: Optional[int] = Field(default=None, primary_key=True, sa_column_kwargs={"autoincrement": True})
-    cluster_id: int = Field(index=True)
+    cluster_id: int = Field(foreign_key="clusters.id", index=True)
     original_text: str
     rating: Optional[int] = Field(default=None)
     version: Optional[str] = Field(default=None)

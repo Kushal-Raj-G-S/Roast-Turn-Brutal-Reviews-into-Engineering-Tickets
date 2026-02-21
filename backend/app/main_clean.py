@@ -27,24 +27,15 @@ async def lifespan(app: FastAPI):
     
     # Initialize bulk processing API (optimized for 100k+ reviews)
     try:
-        from app.bulk_api import init_bulk_api, get_engine_instance
-        from app.bulk_worker import start_worker, stop_worker
-        
+        from app.bulk_api import init_bulk_api
         init_bulk_api(app)
         logger.info("✅ Bulk processing API initialized")
-        
-        # Start background worker
-        engine = get_engine_instance()
-        await start_worker(engine)
-        logger.info("✅ Background worker started")
     except Exception as e:
         logger.error(f"❌ Bulk API initialization failed: {e}")
         raise
     
     yield
-    
     logger.info("🛑 Roast API shutting down...")
-    stop_worker()
 
 
 app = FastAPI(

@@ -14,6 +14,7 @@ import { SpotlightCard } from "@/components/ui";
 import Link from "next/link";
 import { apiClient } from "@/lib/api-client";
 import { supabase } from "@/lib/supabase/client";
+import { useRouter } from "next/navigation";
 
 interface UploadResult {
   success: boolean;
@@ -36,6 +37,7 @@ interface ProgressData {
 }
 
 export default function UploadPage() {
+  const router = useRouter();
   const [isUploading, setIsUploading] = useState(false);
   const [result, setResult] = useState<UploadResult | null>(null);
   const [uploadId, setUploadId] = useState<number | null>(null);
@@ -57,21 +59,15 @@ export default function UploadPage() {
           if (progressData.status === 'completed') {
             clearInterval(pollInterval.current!);
             setIsUploading(false);
-            setResult({
-              success: true,
-              message: "Reviews processed successfully!",
-              stats: {
-                total_reviews: progressData.total,
-                clusters_created: 0,
-                tickets_generated: 0,
-              },
-            });
+            
+            // Immediately redirect to analytics page without showing success screen
+            router.push(`/analytics?upload_id=${uploadId}`);
           } else if (progressData.status === 'failed') {
             clearInterval(pollInterval.current!);
             setIsUploading(false);
             setResult({
               success: false,
-              message: progressData.message || "Processing failed",
+              message: progressData.error_message || "Processing failed",
             });
           }
         }
@@ -110,14 +106,14 @@ export default function UploadPage() {
       // Upload to backend API (returns immediately with upload record)
       const upload = await apiClient.uploadCSV(file);
       
-      // Start polling for progress
-      setUploadId(upload.id);
+      // Start polling for progress - use upload_id from response
+      setUploadId(upload.upload_id);
       setProgress({
-        upload_id: upload.id,
+        upload_id: upload.upload_id,
         status: 'processing',
         stage: 'starting',
         progress: 0,
-        total: upload.total_reviews || 0,
+        total: 0,
         current: 0,
         message: 'Starting to process reviews...'
       });
@@ -173,6 +169,30 @@ export default function UploadPage() {
                 {progress.message}
               </p>
 
+              {/* Review Stats */}
+              {progress.total_reviews && (
+                <div className="grid grid-cols-3 gap-4 max-w-md mx-auto mb-6">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-white">
+                      {progress.total_reviews.toLocaleString()}
+                    </div>
+                    <div className="text-xs text-neutral-500">Total Reviews</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-orange-400">
+                      {(progress.total_reviews - (progress.filtered_noise || 0)).toLocaleString()}
+                    </div>
+                    <div className="text-xs text-neutral-500">Kept</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-emerald-400">
+                      {progress.clusters_created || 0}
+                    </div>
+                    <div className="text-xs text-neutral-500">Clusters</div>
+                  </div>
+                </div>
+              )}
+
               {/* Progress Bar */}
               <div className="max-w-md mx-auto mb-6">
                 <div className="flex items-center justify-between mb-2">
@@ -186,11 +206,6 @@ export default function UploadPage() {
                     animate={{ width: `${progress.progress}%` }}
                     transition={{ duration: 0.5 }}
                   />
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs text-neutral-500">
-                    {progress.current.toLocaleString()} / {progress.total.toLocaleString()} reviews
-                  </span>
                 </div>
               </div>
 
@@ -218,7 +233,7 @@ export default function UploadPage() {
                     {result.message}
                   </h2>
                   <p className="text-neutral-400 mb-8">
-                    Your reviews have been processed and tickets are ready.
+                    Redirecting to analytics dashboard...
                   </p>
 
                   {result.stats && (

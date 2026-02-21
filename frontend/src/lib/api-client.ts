@@ -47,8 +47,15 @@ export interface Upload {
   clusters_created?: number;
   ai_analyzed_count?: number;
   processing_time_ms?: number;
+  processing_time_seconds?: number;
   created_at: string;
   completed_at?: string;
+}
+
+export interface UploadResponse {
+  upload_id: number;
+  status: string;
+  message: string;
 }
 
 export interface Cluster {
@@ -71,6 +78,13 @@ export interface ClusterDetail extends Cluster {
   affected_versions?: string[];
   affected_devices?: string[];
   keywords?: string[];
+  sample_reviews?: Array<{
+    content: string;
+    rating?: number;
+    date?: string;
+    version?: string;
+    device?: string;
+  }>;
   assigned_at?: string;
   updated_at?: string;
   resolved_at?: string;
@@ -217,7 +231,7 @@ class APIClient {
   }
 
   // Upload endpoints
-  async uploadCSV(file: File): Promise<Upload> {
+  async uploadCSV(file: File): Promise<UploadResponse> {
     const formData = new FormData();
     formData.append('file', file);
 
