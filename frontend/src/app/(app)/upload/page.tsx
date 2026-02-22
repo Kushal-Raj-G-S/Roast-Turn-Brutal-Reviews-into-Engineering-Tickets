@@ -85,7 +85,7 @@ export default function UploadPage() {
         clearInterval(pollInterval.current);
       }
     };
-  }, [uploadId, isUploading]);
+  }, [uploadId, isUploading, router]);
 
   const handleFileSelect = async (file: File) => {
     setIsUploading(true);

@@ -22,7 +22,7 @@ class Upload(SQLModel, table=True):
     filename: str
     file_size_bytes: Optional[int] = Field(default=None)
     total_reviews: Optional[int] = Field(default=None)
-    status: str = Field(default="pending")  # pending, processing, completed, failed
+    status: str = Field(default="pending")  # pending, shadow_processing, processing, completed, failed
     error_message: Optional[str] = Field(default=None)
     processed_reviews: Optional[int] = Field(default=None)
     filtered_noise: Optional[int] = Field(default=None)

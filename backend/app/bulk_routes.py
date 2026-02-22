@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from fastapi import APIRouter, File, HTTPException, UploadFile, Depends, BackgroundTasks
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -16,6 +16,7 @@ from app.bulk_models import Upload, Cluster
 from app.config import config
 from app.auth_supabase import get_current_user
 from app.models_supabase import Profile
+from app.shadow_deployment import schedule_shadow_deployment
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ def get_db_session():
 @router.post("/upload", response_model=UploadResponse)
 async def bulk_upload(
     file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None,
     session: Session = Depends(get_db_session),
     user: Profile = Depends(get_current_user)
 ):
@@ -106,8 +108,11 @@ async def bulk_upload(
     Creates a new Upload record with status PENDING and saves the file.
     The background worker will pick it up and process it.
     
+    🔥 Automatically triggers shadow deployment (v2 + v3 monitoring).
+    
     Args:
         file: CSV file with reviews
+        background_tasks: FastAPI background tasks
         session: Database session
         user: Authenticated user
     
@@ -135,12 +140,14 @@ async def bulk_upload(
         config.ensure_upload_dir()
         
         # Create upload record with authenticated user
+        # Use status='shadow_processing' so worker ignores it (orchestrator handles these)
         upload = Upload(
             user_id=user.id,
             filename=file.filename,
             file_size_bytes=file_size_bytes,
-            status="pending"
+            status="shadow_processing"  # Orchestrator-managed, worker ignores
         )
+        
         session.add(upload)
         session.commit()
         session.refresh(upload)
@@ -151,7 +158,22 @@ async def bulk_upload(
             content = await file.read()
             f.write(content)
         
+        # 🔥 FIX: Verify file exists before triggering shadow deployment (fixes race condition)
+        if not file_path.exists():
+            logger.error(f"File not saved properly: {file_path}")
+            raise HTTPException(status_code=500, detail="Failed to save file")
+        
         logger.info(f"Created upload {upload.id} for file {file.filename} ({file_size_mb:.2f}MB)")
+        
+        # 🔥 TRIGGER SHADOW DEPLOYMENT (v2 + v3 monitoring in background)
+        # v1 will be processed by the worker, shadow deployment runs v2 in parallel
+        if background_tasks:
+            background_tasks.add_task(
+                schedule_shadow_deployment,
+                upload.id,
+                str(file_path)
+            )
+            logger.info(f"🔄 Shadow deployment scheduled for upload {upload.id}")
         
         return UploadResponse(
             upload_id=upload.id,

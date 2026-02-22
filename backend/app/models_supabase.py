@@ -51,7 +51,7 @@ class Upload(Base):
     filename = Column(String, nullable=False)
     file_size_bytes = Column(Integer, nullable=True)
     total_reviews = Column(Integer, nullable=True)
-    status = Column(String, nullable=False, default='pending')  # Using String instead of ENUM
+    status = Column(String, nullable=False, default='pending')  # pending, shadow_processing, processing, completed, failed
     error_message = Column(Text, nullable=True)
     processed_reviews = Column(Integer, nullable=True)
     filtered_noise = Column(Integer, nullable=True)

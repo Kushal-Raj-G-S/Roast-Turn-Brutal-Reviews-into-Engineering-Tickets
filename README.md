@@ -35,12 +35,28 @@ Frontend runs on `http://localhost:3000`
 
 ## 📋 Features
 
+### Core Pipeline
 - **CSV Upload** - Drag & drop app reviews CSV
+- **🧠 Schema Intelligence** - Auto-detects 13+ text column formats (see [SCHEMA_INTELLIGENCE.md](./SCHEMA_INTELLIGENCE.md))
 - **Noise Filtering** - Removes generic "good app" reviews
 - **Deduplication** - ChromaDB clusters similar complaints
 - **Metadata Extraction** - Auto-detects versions & devices
 - **Severity Detection** - Classifies issues (critical/high/medium/low)
 - **Cluster View** - Visualize grouped issues
+
+### Production Features
+- **Shadow Deployment** - v1/v2/v3 parallel processing with drift monitoring
+- **Adversarial Detection** - Identifies spam, coordinated attacks, template patterns
+- **Resource Tracking** - Normalized CPU metrics, memory profiling
+- **Structured Logging** - Full request traceability with correlation IDs
+
+## 📚 Documentation
+
+- [SCHEMA_INTELLIGENCE.md](./SCHEMA_INTELLIGENCE.md) - Intelligent CSV schema detection
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - System architecture overview
+- [BACKEND_ARCHITECTURE.md](./BACKEND_ARCHITECTURE.md) - Backend design
+- [FRONTEND_SETUP.md](./FRONTEND_SETUP.md) - Frontend setup guide
+- [RUN_PROJECT.md](./RUN_PROJECT.md) - Complete running instructions
 
 ## 🧪 Testing
 

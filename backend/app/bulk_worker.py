@@ -6,6 +6,7 @@ Polls for PENDING jobs and processes them using BulkProcessor.
 import asyncio
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 
 from sqlmodel import Session, select
@@ -70,7 +71,7 @@ class BulkWorker:
         """
         # Use a separate session just for finding pending jobs
         with Session(self.engine) as session:
-            # Find pending jobs
+            # Find ONLY 'pending' jobs (orchestrator uses 'shadow_processing')
             statement = select(Upload).where(Upload.status == "pending").limit(1)
             job = session.exec(statement).first()
             
@@ -78,7 +79,7 @@ class BulkWorker:
                 return  # No pending jobs
             
             job_id = job.id
-            logger.info(f"Found pending upload {job_id}")
+            logger.info(f"[worker] Found pending upload {job_id}")
         
         # Initialize embedding backend if needed
         self._init_embedding_backend()
@@ -86,16 +87,28 @@ class BulkWorker:
         # Get CSV path
         csv_path = Path(config.UPLOAD_DIR) / f"{job_id}.csv"
         
-        if not csv_path.exists():
-            # Use a new session for error handling
-            with Session(self.engine) as session:
-                job = session.get(Upload, job_id)
-                if job:
-                    logger.error(f"CSV file not found for upload {job_id}: {csv_path}")
-                    job.status = "failed"
-                    job.error_message = f"CSV file not found: {csv_path}"
-                    session.commit()
-            return
+        # 🔥 FIX: Retry with exponential backoff for file race condition
+        max_retries = 5
+        retry_delay = 1.0  # seconds
+        
+        for attempt in range(max_retries):
+            if csv_path.exists():
+                break
+            
+            if attempt < max_retries - 1:
+                logger.warning(f"CSV file not found (attempt {attempt + 1}/{max_retries}): {csv_path}, retrying in {retry_delay}s...")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 1.5  # Exponential backoff
+            else:
+                # Final attempt failed
+                with Session(self.engine) as session:
+                    job = session.get(Upload, job_id)
+                    if job:
+                        logger.error(f"CSV file not found after {max_retries} attempts for upload {job_id}: {csv_path}")
+                        job.status = "failed"
+                        job.error_message = f"CSV file not found after {max_retries} retries: {csv_path}"
+                        session.commit()
+                return
         
         # Process upload (processor will manage its own session)
         try:

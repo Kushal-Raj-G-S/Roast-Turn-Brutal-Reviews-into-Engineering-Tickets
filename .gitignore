@@ -73,6 +73,9 @@ logs/
 # ChromaDB
 chroma_db/
 
+# Extra files (docs, tests, migration scripts)
+extra/
+
 # Test files and scripts
 test_*.py
 test_*.json

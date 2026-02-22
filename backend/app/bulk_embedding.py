@@ -1,10 +1,12 @@
 """
 High-performance embedding backend with CPU multiprocessing support.
 Optimized for bulk processing of 100k+ reviews.
+Uses singleton pattern to prevent multiple model loads.
 """
 
 import logging
 import multiprocessing as mp
+import threading
 from typing import List
 
 import numpy as np
@@ -14,12 +16,33 @@ from app.config import config
 
 logger = logging.getLogger(__name__)
 
+# 🔥 SINGLETON: Load model once, reuse everywhere (fixes multiple loading issue)
+_GLOBAL_MODEL_INSTANCE = None
+_GLOBAL_MODEL_LOCK = threading.Lock()
+
+
+def get_global_model(model_name: str = None) -> SentenceTransformer:
+    """Get or create the global singleton embedding model."""
+    global _GLOBAL_MODEL_INSTANCE
+    
+    if _GLOBAL_MODEL_INSTANCE is None:
+        with _GLOBAL_MODEL_LOCK:
+            if _GLOBAL_MODEL_INSTANCE is None:
+                model_name = model_name or config.MODEL_NAME
+                logger.info(f"🔧 Loading embedding model (singleton): {model_name}")
+                _GLOBAL_MODEL_INSTANCE = SentenceTransformer(model_name)
+                logger.info(f"✅ Model loaded once. Embedding dimension: {_GLOBAL_MODEL_INSTANCE.get_sentence_embedding_dimension()}")
+    
+    return _GLOBAL_MODEL_INSTANCE
+
 
 class EmbeddingBackend:
     """
     Wrapper around sentence-transformers with batch encoding and multiprocessing.
+    Uses singleton pattern to prevent multiple model loads.
     
     Features:
+    - Singleton model instance (loaded once)
     - CPU-parallel encoding using all cores
     - Automatic batching for memory efficiency
     - Progress tracking for large datasets
@@ -37,14 +60,11 @@ class EmbeddingBackend:
             model_name: Model to load (defaults to config.MODEL_NAME)
         """
         self.model_name = model_name or config.MODEL_NAME
-        self.model = None
-        self._load_model()
+        self.model = get_global_model(self.model_name)  # Use singleton
     
     def _load_model(self):
-        """Load the sentence transformer model."""
-        logger.info(f"Loading embedding model: {self.model_name}")
-        self.model = SentenceTransformer(self.model_name)
-        logger.info(f"Model loaded. Embedding dimension: {self.model.get_sentence_embedding_dimension()}")
+        """Load the sentence transformer model (deprecated - uses singleton now)."""
+        self.model = get_global_model(self.model_name)
     
     def encode_batch(
         self,
