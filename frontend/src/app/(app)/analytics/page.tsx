@@ -381,28 +381,31 @@ export default function AnalyticsPage() {
           transition={{ delay: 0.2 }}
         >
           <SpotlightCard className="p-6 relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-emerald-500/10 to-transparent rounded-full blur-2xl"></div>
+            <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-amber-500/10 to-transparent rounded-full blur-2xl"></div>
             <div className="relative">
               <div className="flex items-start justify-between mb-4">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500/20 to-green-500/20 border border-emerald-500/20 flex items-center justify-center">
-                  <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/20 flex items-center justify-center">
+                  <Target className="w-6 h-6 text-amber-400" />
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-emerald-400 uppercase tracking-wider font-bold">{resolutionRate}%</p>
+                  <p className="text-xs text-amber-400 uppercase tracking-wider font-bold">
+                    {analytics?.upload_data?.total_reviews && analytics?.upload_data?.filtered_noise 
+                      ? Math.round((analytics.upload_data.filtered_noise / analytics.upload_data.total_reviews) * 100)
+                      : 0}%
+                  </p>
                 </div>
               </div>
-              <p className="text-sm text-neutral-400 mb-2">Issues Resolved</p>
+              <p className="text-sm text-neutral-400 mb-2">Noise Filtered</p>
               <p className="text-4xl font-black text-white mb-1">
-                {user_statistics.total_issues_resolved}
+                {analytics?.upload_data?.filtered_noise || 0}
               </p>
               <div className="flex items-center gap-2 mt-3">
-                <div className="flex-1 h-1 rounded-full bg-emerald-500/20">
-                  <div 
-                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-green-500"
-                    style={{ width: `${resolutionRate}%` }}
-                  ></div>
-                </div>
-                <span className="text-xs text-emerald-400 font-medium">Resolution rate</span>
+                <span className="text-xs text-neutral-500">
+                  {analytics?.upload_data?.total_reviews && analytics?.upload_data?.filtered_noise
+                    ? `${analytics.upload_data.total_reviews - analytics.upload_data.filtered_noise} kept for analysis`
+                    : 'Low-quality reviews removed'
+                  }
+                </span>
               </div>
             </div>
           </SpotlightCard>
@@ -424,12 +427,29 @@ export default function AnalyticsPage() {
                   <p className="text-xs text-neutral-500 uppercase tracking-wider">Avg</p>
                 </div>
               </div>
-              <p className="text-sm text-neutral-400 mb-2">Sentiment Score</p>
+              <p className="text-sm text-neutral-400 mb-2">Avg Sentiment</p>
               <p className="text-4xl font-black text-white mb-1">
-                {user_statistics.average_sentiment_score.toFixed(2)}
+                {(() => {
+                  const score = user_statistics.average_sentiment_score;
+                  if (score === 0) {
+                    // Calculate from ratings if available
+                    const total = user_statistics.rating_1_count + user_statistics.rating_2_count + 
+                                  user_statistics.rating_3_count + user_statistics.rating_4_count + 
+                                  user_statistics.rating_5_count;
+                    if (total > 0) {
+                      const weightedSum = (user_statistics.rating_1_count * -1) + 
+                                         (user_statistics.rating_2_count * -0.5) + 
+                                         (user_statistics.rating_3_count * 0) + 
+                                         (user_statistics.rating_4_count * 0.5) + 
+                                         (user_statistics.rating_5_count * 1);
+                      return (weightedSum / total).toFixed(2);
+                    }
+                  }
+                  return score.toFixed(2);
+                })()}
               </p>
               <div className="flex items-center gap-2 mt-3">
-                <span className="text-xs text-neutral-500">Scale: -1.00 to +1.00</span>
+                <span className="text-xs text-neutral-500">-1.0 (negative) to +1.0 (positive)</span>
               </div>
             </div>
           </SpotlightCard>
@@ -461,7 +481,16 @@ export default function AnalyticsPage() {
               </div>
             </div>
 
-            {totalSeverity > 0 ? (
+            {totalSeverity > 0 ? (() => {
+              // Calculate max count for relative bar scaling (max severity gets 100% bar width)
+              const maxCount = Math.max(
+                severity_distribution.critical,
+                severity_distribution.high,
+                severity_distribution.medium,
+                severity_distribution.low
+              );
+              
+              return (
               <div className="space-y-4">
                 {/* Critical */}
                 <div className="group hover:bg-red-500/5 p-3 rounded-lg transition-colors">
@@ -480,7 +509,7 @@ export default function AnalyticsPage() {
                   <div className="h-3 rounded-full bg-white/5 overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
-                      animate={{ width: `${(severity_distribution.critical / totalSeverity) * 100}%` }}
+                      animate={{ width: `${(severity_distribution.critical / maxCount) * 100}%` }}
                       transition={{ duration: 0.8, delay: 0.3 }}
                       className="h-full bg-gradient-to-r from-red-600 via-red-500 to-red-400 rounded-full shadow-lg shadow-red-500/30"
                     />
@@ -504,7 +533,7 @@ export default function AnalyticsPage() {
                   <div className="h-3 rounded-full bg-white/5 overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
-                      animate={{ width: `${(severity_distribution.high / totalSeverity) * 100}%` }}
+                      animate={{ width: `${(severity_distribution.high / maxCount) * 100}%` }}
                       transition={{ duration: 0.8, delay: 0.4 }}
                       className="h-full bg-gradient-to-r from-orange-600 via-orange-500 to-orange-400 rounded-full shadow-lg shadow-orange-500/30"
                     />
@@ -528,7 +557,7 @@ export default function AnalyticsPage() {
                   <div className="h-3 rounded-full bg-white/5 overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
-                      animate={{ width: `${(severity_distribution.medium / totalSeverity) * 100}%` }}
+                      animate={{ width: `${(severity_distribution.medium / maxCount) * 100}%` }}
                       transition={{ duration: 0.8, delay: 0.5 }}
                       className="h-full bg-gradient-to-r from-yellow-600 via-yellow-500 to-yellow-400 rounded-full shadow-lg shadow-yellow-500/30"
                     />
@@ -552,14 +581,15 @@ export default function AnalyticsPage() {
                   <div className="h-3 rounded-full bg-white/5 overflow-hidden">
                     <motion.div
                       initial={{ width: 0 }}
-                      animate={{ width: `${(severity_distribution.low / totalSeverity) * 100}%` }}
+                      animate={{ width: `${(severity_distribution.low / maxCount) * 100}%` }}
                       transition={{ duration: 0.8, delay: 0.6 }}
                       className="h-full bg-gradient-to-r from-blue-600 via-blue-500 to-blue-400 rounded-full shadow-lg shadow-blue-500/30"
                     />
                   </div>
                 </div>
               </div>
-            ) : (
+              );
+            })() : (
               <p className="text-neutral-500 text-center py-12">No severity data available</p>
             )}
           </SpotlightCard>
