@@ -33,12 +33,12 @@ export function MarketingFooter() {
             <h4 className="font-semibold text-white mb-4">Product</h4>
             <ul className="space-y-2">
               <li>
-                <Link href="#features" className="text-sm text-neutral-500 hover:text-white transition-colors">
+                <Link href="/#features" className="text-sm text-neutral-500 hover:text-white transition-colors">
                   Features
                 </Link>
               </li>
               <li>
-                <Link href="#pricing" className="text-sm text-neutral-500 hover:text-white transition-colors">
+                <Link href="/pricing" className="text-sm text-neutral-500 hover:text-white transition-colors">
                   Pricing
                 </Link>
               </li>
@@ -55,7 +55,7 @@ export function MarketingFooter() {
             <h4 className="font-semibold text-white mb-4">Resources</h4>
             <ul className="space-y-2">
               <li>
-                <Link href="#docs" className="text-sm text-neutral-500 hover:text-white transition-colors">
+                <Link href="/docs" className="text-sm text-neutral-500 hover:text-white transition-colors">
                   Documentation
                 </Link>
               </li>

@@ -23,12 +23,12 @@ import pandas as pd
 from sqlmodel import Session, select
 from dotenv import load_dotenv
 
-from app.bulk_models import Upload, Cluster, get_engine
-from app.bulk_processor import BulkProcessor
-from app.bulk_embedding import EmbeddingBackend
+from app.models.bulk_models import Upload, Cluster, get_engine
+from app.services.bulk_processor import BulkProcessor
+from app.services.bulk_embedding import EmbeddingBackend
 
 # For creating shadow test user profile
-from app.models_supabase import Profile as SupabaseProfile
+from app.models.models_supabase import Profile as SupabaseProfile
 from sqlalchemy.orm import Session as SASession
 
 # Load environment variables
@@ -145,7 +145,7 @@ class RealShadowOrchestrator:
             raise RuntimeError("Database engine not initialized")
         
         # Initialize embedding backend (shared by v1 and v2)
-        from app.bulk_embedding import EmbeddingBackend
+        from app.services.bulk_embedding import EmbeddingBackend
         self.embedding_backend = EmbeddingBackend()
         
         # Create or get shadow test user
@@ -249,6 +249,7 @@ class RealShadowOrchestrator:
                     "upload_id": upload_id,
                     "total_reviews": stats["total_rows"],
                     "kept_reviews": stats["kept_rows"],
+                    "filtered_reviews": stats["total_rows"] - stats["kept_rows"],
                     "clusters": [
                         {
                             "id": c.id,
@@ -397,6 +398,7 @@ class RealShadowOrchestrator:
                     "upload_id": upload_id,
                     "total_reviews": stats["total_rows"],
                     "kept_reviews": stats["kept_rows"],
+                    "filtered_reviews": stats["total_rows"] - stats["kept_rows"],
                     "clusters": [
                         {
                             "id": c.id,

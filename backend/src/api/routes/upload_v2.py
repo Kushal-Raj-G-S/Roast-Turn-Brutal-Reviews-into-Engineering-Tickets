@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
-from app.auth_supabase import get_current_user
+from app.database.auth_supabase import get_current_user
 from src.bootstrap import bootstrap_application, ApplicationConfig
 from src.infrastructure.dependency_injection import DependencyContainer
 from src.domain.entities import Upload as UploadEntity

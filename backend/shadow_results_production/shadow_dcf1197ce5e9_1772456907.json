@@ -1,0 +1,61 @@
+{
+  "correlation_id": "shadow_dcf1197ce5e9_1772456907",
+  "timestamp": "2026-03-02T13:08:42.190919",
+  "v1_metrics": {
+    "version": "v1",
+    "correlation_id": "shadow_dcf1197ce5e9_1772456907",
+    "start_time": 1772456907.8593447,
+    "end_time": 1772456915.3189664,
+    "duration_ms": 7459.6216678619385,
+    "success": true,
+    "error": null,
+    "total_reviews": 10000,
+    "clusters_count": 20,
+    "avg_actionability": 4.0,
+    "avg_severity": 3.0,
+    "high_priority_count": 2
+  },
+  "v2_metrics": {
+    "version": "v2",
+    "correlation_id": "shadow_dcf1197ce5e9_1772456907",
+    "start_time": 1772456915.3515532,
+    "end_time": 1772456922.0946012,
+    "duration_ms": 6743.0479526519775,
+    "success": true,
+    "error": null,
+    "total_reviews": 10000,
+    "clusters_count": 20,
+    "avg_actionability": 4.0,
+    "avg_severity": 3.0,
+    "high_priority_count": 2
+  },
+  "comparison": {
+    "correlation_id": "shadow_dcf1197ce5e9_1772456907",
+    "timestamp": "2026-03-02T13:08:42.116108",
+    "cluster_count_diff": 0,
+    "cluster_overlap_pct": 100.0,
+    "actionability_diff": 0.0,
+    "severity_diff": 0.0,
+    "priority_diff": 0,
+    "v1_confidence": 0.95,
+    "v2_confidence": 0.9,
+    "match_score": 1.0,
+    "significant_difference": false,
+    "differences": {
+      "cluster_count": "v1=20, v2=20, diff=0",
+      "actionability": "v1=4.00, v2=4.00, diff=0.000",
+      "severity": "v1=3.00, v2=3.00, diff=0.000",
+      "high_priority": "v1=2, v2=2, diff=0"
+    }
+  },
+  "v3": {
+    "triggered": true,
+    "drift_detected": false,
+    "adversarial_detected": false,
+    "alerts": []
+  },
+  "status": {
+    "shadow_success": true,
+    "monitoring_success": true
+  }
+}

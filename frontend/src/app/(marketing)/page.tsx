@@ -23,33 +23,33 @@ const features = [
     span: "col-span-2",
   },
   {
-    title: "Instant Tickets",
-    description: "Turn review clusters into engineering tickets with severity levels and summaries.",
-    icon: Zap,
-    span: "col-span-1",
-  },
-  {
-    title: "Priority Scoring",
-    description: "AI analyzes sentiment and frequency to surface critical issues first.",
+    title: "Sentiment & Severity Analysis",
+    description: "Automatic sentiment scoring and severity classification (critical, high, medium, low) for every cluster.",
     icon: Target,
     span: "col-span-1",
   },
   {
-    title: "Multi-Platform",
-    description: "Works with Google Play, App Store, Trustpilot, and custom CSV exports.",
+    title: "Noise Filtering",
+    description: "Smart filtering removes spam, duplicates, and irrelevant reviews before analysis.",
+    icon: Shield,
+    span: "col-span-1",
+  },
+  {
+    title: "CSV Upload",
+    description: "Upload any review dataset as CSV. Auto-detects text and rating columns - zero configuration needed.",
     icon: Layers,
     span: "col-span-1",
   },
   {
-    title: "Smart Summaries",
-    description: "GPT-4 level summaries that capture the essence of hundreds of reviews.",
+    title: "Cluster Summaries",
+    description: "AI-generated summaries for each cluster with sample reviews and key insights.",
     icon: Sparkles,
     span: "col-span-1",
   },
   {
-    title: "Secure & Private",
-    description: "Your data stays yours. SOC2 compliant with end-to-end encryption.",
-    icon: Shield,
+    title: "Analytics Dashboard",
+    description: "Real-time processing status, cluster distribution, sentiment breakdown, and severity metrics.",
+    icon: Zap,
     span: "col-span-2",
   },
 ];
@@ -172,7 +172,13 @@ export default function MarketingPage() {
       {/* ================================================================== */}
       {/* PHONE MOCKUP HERO - Scroll-Driven Animation (300vh) */}
       {/* ================================================================== */}
-      <PhoneMockup />
+      <div className="relative" style={{ isolation: "isolate" }}>
+        {/* Animated Mesh Gradient Background */}
+        <div className="mesh-gradient" style={{ zIndex: 0 }} />
+        <div className="relative" style={{ zIndex: 1 }}>
+          <PhoneMockup />
+        </div>
+      </div>
 
       {/* ================================================================== */}
       {/* TRANSITION SECTION */}
@@ -185,9 +191,9 @@ export default function MarketingPage() {
             viewport={{ once: true, margin: "-100px" }}
             transition={{ duration: 0.6 }}
           >
-            <h2 className="text-4xl md:text-7xl font-black text-white mb-6 font-heading tracking-tight leading-[0.95]">
+            <h2 className="text-4xl md:text-7xl font-black text-white mb-6 font-playfair tracking-tight leading-[0.95]" style={{ fontWeight: 900 }}>
               Stop drowning in{" "}
-              <span className="text-gradient-fire font-heading">complaints</span>
+              <span className="text-gradient-fire font-playfair italic">complaints</span>
             </h2>
             <p className="text-lg md:text-xl text-neutral-300 max-w-2xl mx-auto mb-10 font-sans tracking-normal leading-relaxed">
               Every negative review is a bug report in disguise. ROAST reads them all, 
@@ -238,10 +244,6 @@ export default function MarketingPage() {
 
           {/* Stats */}
           <motion.div
-            initial={{ opacity: 0, y: 40 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: "-50px" }}
-            transition={{ duration: 0.6, delay: 0.2 }}
             className="grid grid-cols-3 gap-8 max-w-xl mx-auto mt-20"
           >
             {[
@@ -249,10 +251,17 @@ export default function MarketingPage() {
               { value: "500+", label: "Teams Using" },
               { value: "87%", label: "Time Saved" },
             ].map((stat, i) => (
-              <div key={i} className="text-center">
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 40 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: "-50px" }}
+                transition={{ duration: 0.6, delay: 0.2 + i * 0.1 }}
+                className="text-center"
+              >
                 <div className="text-3xl font-black text-white font-display tracking-wider">{stat.value}</div>
                 <div className="text-sm text-neutral-500 font-heading">{stat.label}</div>
-              </div>
+              </motion.div>
             ))}
           </motion.div>
         </div>
@@ -265,12 +274,14 @@ export default function MarketingPage() {
         <div className="max-w-6xl mx-auto relative z-20">
           {/* Section Header */}
           <motion.div
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
             className="text-center mb-16"
           >
-            <h2 className="text-4xl md:text-6xl font-black text-white mb-4 font-heading tracking-tight">
+            <div className="text-spaced mb-4 tracking-[0.25em]">BUILT FOR ENGINEERING TEAMS</div>
+            <h2 className="text-4xl md:text-6xl font-black text-white mb-4 font-playfair tracking-tight" style={{ fontWeight: 900 }}>
               Everything You Need
             </h2>
             <p className="text-lg md:text-xl text-neutral-300 max-w-xl mx-auto font-sans tracking-normal">
@@ -283,13 +294,13 @@ export default function MarketingPage() {
             {features.map((feature, i) => (
               <motion.div
                 key={i}
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 40 }}
                 whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.1 }}
+                viewport={{ once: true, margin: "-50px" }}
+                transition={{ duration: 0.6, delay: i * 0.1 }}
                 className={feature.span}
               >
-                <SpotlightCard className="h-full p-6">
+                <SpotlightCard className="h-full p-6 feature-card">
                   <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-orange-500/20 to-red-500/20 border border-orange-500/20 flex items-center justify-center mb-4">
                     <feature.icon className="w-6 h-6 text-orange-400" />
                   </div>
@@ -314,13 +325,11 @@ export default function MarketingPage() {
           initial={{ opacity: 0, scale: 0.95 }}
           whileInView={{ opacity: 1, scale: 1 }}
           viewport={{ once: true }}
+          transition={{ duration: 0.6 }}
           className="max-w-4xl mx-auto relative z-20"
         >
-          <div className="relative rounded-3xl bg-gradient-to-br from-orange-500/10 via-red-500/10 to-pink-500/10 border border-white/10 p-12 md:p-20 text-center overflow-hidden">
-            {/* Glow */}
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-orange-500/30 rounded-full blur-3xl" />
-
-            <h2 className="relative text-4xl md:text-5xl font-black text-white mb-4">
+          <div className="relative rounded-3xl bg-gradient-to-br from-orange-500/10 via-red-500/10 to-pink-500/10 border border-white/10 p-12 md:p-20 text-center overflow-hidden rotating-gradient">
+            <h2 className="relative text-4xl md:text-5xl font-black text-white mb-4 font-playfair" style={{ fontWeight: 900 }}>
               Ready to Stop Reading Reviews?
             </h2>
             <p className="relative text-lg text-neutral-400 max-w-xl mx-auto mb-8">
@@ -328,7 +337,7 @@ export default function MarketingPage() {
             </p>
             <Link
               href="/dashboard"
-              className="relative inline-flex items-center gap-2 px-10 py-5 rounded-full bg-white text-black font-bold hover:scale-105 transition-transform"
+              className="relative inline-flex items-center gap-2 px-10 py-5 rounded-full bg-white text-black font-bold hover:scale-105 transition-transform cta-button-glow"
             >
               Get Started Free
               <ArrowRight className="w-5 h-5" />

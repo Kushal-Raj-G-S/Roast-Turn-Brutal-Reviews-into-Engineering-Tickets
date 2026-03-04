@@ -1,0 +1,78 @@
+{
+  "correlation_id": "shadow_139229d442e8_1772509037",
+  "timestamp": "2026-03-03T03:37:43.672046",
+  "v1_metrics": {
+    "version": "v1",
+    "correlation_id": "shadow_139229d442e8_1772509037",
+    "start_time": 1772509037.9717157,
+    "end_time": 1772509050.4249485,
+    "duration_ms": 12453.232765197754,
+    "success": true,
+    "error": null,
+    "total_reviews": 10000,
+    "clusters_count": 20,
+    "avg_actionability": 4.0,
+    "avg_severity": 3.0,
+    "high_priority_count": 3
+  },
+  "v2_metrics": {
+    "version": "v2",
+    "correlation_id": "shadow_139229d442e8_1772509037",
+    "start_time": 1772509050.462332,
+    "end_time": 1772509062.397443,
+    "duration_ms": 11935.111045837402,
+    "success": true,
+    "error": null,
+    "total_reviews": 10000,
+    "clusters_count": 20,
+    "avg_actionability": 4.0,
+    "avg_severity": 3.0,
+    "high_priority_count": 3
+  },
+  "comparison": {
+    "correlation_id": "shadow_139229d442e8_1772509037",
+    "timestamp": "2026-03-03T03:37:42.433972",
+    "cluster_count_diff": 0,
+    "cluster_overlap_pct": 100.0,
+    "actionability_diff": 0.0,
+    "severity_diff": 0.0,
+    "priority_diff": 0,
+    "v1_confidence": 0.95,
+    "v2_confidence": 0.9,
+    "match_score": 1.0,
+    "significant_difference": false,
+    "differences": {
+      "cluster_count": "v1=20, v2=20, diff=0",
+      "actionability": "v1=4.00, v2=4.00, diff=0.000",
+      "severity": "v1=3.00, v2=3.00, diff=0.000",
+      "high_priority": "v1=3, v2=3, diff=0"
+    }
+  },
+  "v3": {
+    "triggered": true,
+    "drift_detected": false,
+    "adversarial_detected": true,
+    "alerts": [
+      {
+        "type": "adversarial",
+        "severity": "critical",
+        "message": "Adversarial content detected",
+        "details": {
+          "adversarial_detected": true,
+          "signals": [
+            {
+              "type": "coordinated_duplicates",
+              "duplicate_rate": 0.234,
+              "threshold": 0.05
+            }
+          ],
+          "rows_analyzed": 5000
+        }
+      }
+    ]
+  },
+  "status": {
+    "shadow_success": true,
+    "monitoring_success": true
+  }
+}

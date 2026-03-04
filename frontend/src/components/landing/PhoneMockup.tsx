@@ -18,6 +18,60 @@ import { useRef, useState, useEffect } from "react";
 import { motion, useScroll, useTransform, useMotionValue } from "framer-motion";
 
 // ============================================================================
+// PARTICLE FIELD - Subtle ambient depth
+// ============================================================================
+
+const PARTICLES = [
+  { x: '10%', y: '20%', size: 2, duration: 8, delay: 0, opacity: 0.3, drift: 15 },
+  { x: '85%', y: '15%', size: 2, duration: 10, delay: 1, opacity: 0.2, drift: -10 },
+  { x: '25%', y: '70%', size: 2, duration: 9, delay: 2, opacity: 0.25, drift: 20 },
+  { x: '70%', y: '60%', size: 2, duration: 11, delay: 0.5, opacity: 0.15, drift: -15 },
+  { x: '45%', y: '85%', size: 2, duration: 7, delay: 1.5, opacity: 0.2, drift: 10 },
+  { x: '15%', y: '40%', size: 2, duration: 12, delay: 3, opacity: 0.1, drift: -20 },
+  { x: '90%', y: '75%', size: 2, duration: 8, delay: 2.5, opacity: 0.3, drift: 15 },
+  { x: '55%', y: '25%', size: 2, duration: 10, delay: 1, opacity: 0.2, drift: -12 },
+  { x: '35%', y: '55%', size: 2, duration: 9, delay: 0, opacity: 0.25, drift: 18 },
+  { x: '80%', y: '35%', size: 2, duration: 11, delay: 2, opacity: 0.15, drift: -8 },
+  { x: '20%', y: '90%', size: 2, duration: 7, delay: 1, opacity: 0.2, drift: 12 },
+  { x: '60%', y: '10%', size: 2, duration: 10, delay: 0, opacity: 0.3, drift: -15 },
+  { x: '40%', y: '65%', size: 2, duration: 8, delay: 2, opacity: 0.1, drift: 20 },
+  { x: '75%', y: '45%', size: 2, duration: 12, delay: 1.5, opacity: 0.2, drift: -10 },
+  { x: '30%', y: '30%', size: 2, duration: 9, delay: 3, opacity: 0.15, drift: 15 },
+  { x: '65%', y: '80%', size: 2, duration: 11, delay: 0.5, opacity: 0.25, drift: -18 },
+  { x: '50%', y: '50%', size: 2, duration: 7, delay: 2.5, opacity: 0.2, drift: 10 },
+  { x: '95%', y: '55%', size: 2, duration: 10, delay: 1, opacity: 0.3, drift: -12 },
+  { x: '5%', y: '75%', size: 2, duration: 8, delay: 0, opacity: 0.1, drift: 20 },
+  { x: '48%', y: '95%', size: 2, duration: 9, delay: 2, opacity: 0.2, drift: -15 },
+];
+
+function ParticleField() {
+  return (
+    <>
+      {PARTICLES.map((particle, i) => (
+        <div
+          key={i}
+          className="particle"
+          style={{
+            position: 'absolute',
+            left: particle.x,
+            top: particle.y,
+            width: `${particle.size}px`,
+            height: `${particle.size}px`,
+            background: `rgba(249, 115, 22, ${particle.opacity})`,
+            borderRadius: '50%',
+            pointerEvents: 'none',
+            zIndex: 0,
+            '--duration': `${particle.duration}s`,
+            '--delay': `${particle.delay}s`,
+            '--drift-x': `${particle.drift}px`,
+          } as React.CSSProperties}
+        />
+      ))}
+    </>
+  );
+}
+
+// ============================================================================
 // SCROLL PHASES
 // ============================================================================
 
@@ -49,8 +103,10 @@ const PHONE = {
 
 function LockScreen() {
   const [time, setTime] = useState(new Date());
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     const timer = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
@@ -67,16 +123,18 @@ function LockScreen() {
           initial={{ scale: 0.9, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ duration: 0.8, type: "spring", stiffness: 100 }}
+          suppressHydrationWarning
         >
-          {hours}:{minutes}
+          {mounted ? `${hours}:${minutes}` : '12:00'}
         </motion.div>
         <motion.div 
           className="text-sm text-neutral-400 mt-3 font-mono tracking-wider"
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3, duration: 0.6 }}
+          suppressHydrationWarning
         >
-          {time.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+          {mounted ? time.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }) : 'Loading...'}
         </motion.div>
       </div>
 
@@ -267,7 +325,11 @@ function ReviewCard({ review, scrollProgress }: { review: typeof REVIEWS[0]; scr
         animate={{ scale: 1, x: 0, rotate: 0 }}
         transition={{ delay: 0.5, duration: 0.6, type: "spring", stiffness: 180, damping: 12 }}
         whileHover={{ scale: 1.1, rotate: 3, transition: { duration: 0.2 } }}
-        className={`inline-block px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-widest mb-1.5 border font-display ${severityColors[review.severity]}`}
+        className={`inline-block px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-widest mb-1.5 border font-display ${severityColors[review.severity]} ${
+          review.severity === 'critical' ? 'badge-critical' : 
+          review.severity === 'high' ? 'badge-high' : 
+          review.severity === 'medium' ? 'badge-medium' : ''
+        }`}
       >
         {review.severity}
       </motion.div>
@@ -558,54 +620,77 @@ function PlayStoreContent({ scrollY, scrollProgress }: { scrollY: number; scroll
       {/* Spacer */}
       <div className="h-16" />
 
-      {/* FULL SCREEN MEME - Stays visible */}
-      <div className="my-8 relative h-[500px] rounded-2xl overflow-hidden">
-        <img
-          src="/meme.jpg"
-          alt="A Few Moments Later"
-          className="absolute inset-0 w-full h-full object-cover"
-        />
+      {/* AI PROCESSING TERMINAL CARD - with ROAST branding */}
+      <div 
+        className="my-8 w-full h-[500px] flex flex-col items-center justify-center gap-4 p-8 rounded-2xl" 
+        style={{ 
+          background: "#000",
+          isolation: "isolate",
+          zIndex: 20,
+          border: '1px solid rgba(249, 115, 22, 0.1)'
+        }}
+      >
+        <div className="text-center w-full">
+          {/* Using ROAST with Logo */}
+          <div className="flex flex-col items-center gap-3 mb-8">
+            <motion.img
+              src="/logo.png"
+              alt="ROAST Logo"
+              initial={{ scale: 0.8, opacity: 0 }}
+              whileInView={{ scale: 1, opacity: 1 }}
+              viewport={{ once: false }}
+              transition={{ duration: 0.4 }}
+              className="w-12 h-12"
+            />
+            <p className="text-white/50 text-xs uppercase tracking-widest font-mono">
+              using ROAST
+            </p>
+          </div>
+          
+          <p className="text-white/30 text-xs uppercase tracking-widest mb-6 font-mono">
+            processing reviews...
+          </p>
+          
+          <p className="text-white font-mono text-sm mt-6 opacity-60">
+            Clustering 52,847 reviews...
+          </p>
+          <p className="text-white font-mono text-sm mt-2 opacity-60">
+            Detecting severity patterns...
+          </p>
+          <p className="text-white font-mono text-sm mt-2 opacity-60">
+            Generating engineering tickets...
+          </p>
+          
+          <div className="mt-8 flex justify-center gap-1">
+            {[1, 2, 3, 4, 5].map(i => (
+              <div 
+                key={i} 
+                className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse" 
+                style={{ animationDelay: `${i * 0.15}s`, opacity: 0.4 }} 
+              />
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Spacer */}
       <div className="h-16" />
 
-      {/* PROFESSIONAL "AFTER USING ROAST" SCREEN */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        whileInView={{ opacity: 1 }}
-        viewport={{ once: false, amount: 0.5 }}
-        transition={{ duration: 0.5 }}
-        className="my-8 flex flex-col items-center justify-center py-20 bg-gradient-to-br from-neutral-900 to-black rounded-2xl border border-neutral-800"
-      >
-        <motion.img
-          src="/logo.png"
-          alt="ROAST"
-          initial={{ scale: 0.8, opacity: 0 }}
-          whileInView={{ scale: 1, opacity: 1 }}
-          viewport={{ once: false }}
-          transition={{ duration: 0.4, type: "spring", stiffness: 200 }}
-          className="w-20 h-20 mb-6"
-        />
-        <motion.h3
-          initial={{ opacity: 0, y: 10 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: false }}
-          transition={{ duration: 0.3, delay: 0.1 }}
-          className="text-2xl font-black text-white mb-3 font-heading"
-        >
-          After Using ROAST
-        </motion.h3>
-        <motion.p
-          initial={{ opacity: 0 }}
-          whileInView={{ opacity: 1 }}
-          viewport={{ once: false }}
-          transition={{ duration: 0.3, delay: 0.2 }}
-          className="text-sm text-neutral-400 font-sans"
-        >
-          All issues resolved
-        </motion.p>
-      </motion.div>
+      {/* SPONGEBOB MEME IMAGE */}
+      <motion.img
+        src="/meme.jpg"
+        alt="A Few Moments Later"
+        initial={{ opacity: 0, scale: 0.95 }}
+        whileInView={{ opacity: 1, scale: 1 }}
+        viewport={{ once: false, amount: 0.3 }}
+        transition={{ duration: 0.6, type: "spring" }}
+        className="my-8 w-full h-auto rounded-2xl"
+        style={{ 
+          isolation: "isolate",
+          objectFit: "cover",
+          maxHeight: "400px"
+        }}
+      />
 
       {/* Spacer */}
       <div className="h-16" />
@@ -926,11 +1011,34 @@ function PlayStoreContent({ scrollY, scrollProgress }: { scrollY: number; scroll
 
 export function PhoneMockup() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [isScrolling, setIsScrolling] = useState(false);
+  const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
 
   const { scrollYProgress } = useScroll({
     target: containerRef,
     offset: ["start start", "end end"],
   });
+
+  // Track scrolling state to pause floating animation
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolling(true);
+      if (scrollTimeout.current) {
+        clearTimeout(scrollTimeout.current);
+      }
+      scrollTimeout.current = setTimeout(() => {
+        setIsScrolling(false);
+      }, 500);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (scrollTimeout.current) {
+        clearTimeout(scrollTimeout.current);
+      }
+    };
+  }, []);
 
   // ==========================================================================
   // PHONE SHELL (Minimal, stable)
@@ -1014,6 +1122,15 @@ export function PhoneMockup() {
   const rightAnnotation3Opacity = useTransform(scrollYProgress, [0.8, 0.85], [0, 1]);
 
   // ==========================================================================
+  // SCREEN GLOW - Reactive to scroll phase
+  // ==========================================================================
+  
+  // Determine if we're in critical (red) or resolved (green) phase
+  const currentProgress = scrollYProgress.get();
+  const isInCriticalPhase = currentProgress >= 0.4 && currentProgress < 0.75;
+  const isInResolvedPhase = currentProgress >= 0.85;
+
+  // ==========================================================================
   // RENDER
   // ==========================================================================
 
@@ -1022,152 +1139,151 @@ export function PhoneMockup() {
       {/* Sticky Container - Below Navbar */}
       <div className="sticky top-20 h-[calc(100vh-5rem)] flex items-center justify-center overflow-hidden px-4">
         
-        {/* Background */}
-        <div className="absolute inset-0 bg-gradient-to-b from-neutral-950 via-neutral-900 to-neutral-950" />
+        {/* ================================================================ */}
+        {/* LAYERED DEPTH BACKGROUND */}
+        {/* ================================================================ */}
+        <div className="absolute inset-0 bg-black" />
+        
+        {/* Animated Orb 1 - Bottom Left */}
+        <div 
+          className="absolute pointer-events-none z-0"
+          style={{
+            left: '-200px',
+            bottom: '-100px',
+            width: '800px',
+            height: '600px',
+            background: 'radial-gradient(circle, rgba(249, 115, 22, 0.06) 0%, transparent 70%)',
+            filter: 'blur(120px)',
+            animation: 'orbDrift1 18s ease-in-out infinite alternate',
+          }}
+        />
+        
+        {/* Animated Orb 2 - Top Right */}
+        <div 
+          className="absolute pointer-events-none z-0"
+          style={{
+            right: '-150px',
+            top: '0',
+            width: '600px',
+            height: '600px',
+            background: 'radial-gradient(circle, rgba(220, 38, 38, 0.04) 0%, transparent 70%)',
+            filter: 'blur(100px)',
+            animation: 'orbDrift2 22s ease-in-out infinite alternate',
+          }}
+        />
+        
+        {/* Animated Orb 3 - Center Top */}
+        <div 
+          className="absolute pointer-events-none z-0"
+          style={{
+            left: '50%',
+            top: '0',
+            transform: 'translateX(-50%)',
+            width: '400px',
+            height: '200px',
+            background: 'radial-gradient(ellipse, rgba(249, 115, 22, 0.03) 0%, transparent 70%)',
+            filter: 'blur(80px)',
+          }}
+        />
 
-        {/* LEFT SIDE ANNOTATIONS */}
-        <div className="absolute left-8 top-1/2 -translate-y-1/2 max-w-xs space-y-8 hidden xl:block">
-          <motion.div style={{ opacity: leftAnnotation1Opacity, x: useTransform(leftAnnotation1Opacity, [0, 1], [-20, 0]) }}>
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-white">Real Problems</p>
-                <p className="text-xs text-neutral-400 leading-relaxed">
-                  Every negative review represents a real user facing a real issue
-                </p>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div style={{ opacity: leftAnnotation2Opacity, x: useTransform(leftAnnotation2Opacity, [0, 1], [-20, 0]) }}>
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-full bg-orange-500/20 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-white">Auto-Clustering</p>
-                <p className="text-xs text-neutral-400 leading-relaxed">
-                  ROAST groups similar complaints automatically
-                </p>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div style={{ opacity: leftAnnotation3Opacity, x: useTransform(leftAnnotation3Opacity, [0, 1], [-20, 0]) }}>
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-white">Instant Tickets</p>
-                <p className="text-xs text-neutral-400 leading-relaxed">
-                  Tickets ready for your engineering team to act on
-                </p>
-              </div>
-            </div>
-          </motion.div>
-        </div>
-
-        {/* RIGHT SIDE ANNOTATIONS */}
-        <div className="absolute right-8 top-1/2 -translate-y-1/2 max-w-xs space-y-8 hidden xl:block">
-          <motion.div style={{ opacity: rightAnnotation1Opacity, x: useTransform(rightAnnotation1Opacity, [0, 1], [20, 0]) }}>
-            <div className="flex items-start gap-3">
-              <div>
-                <p className="text-sm font-semibold text-white text-right">Stop Losing Users</p>
-                <p className="text-xs text-neutral-400 leading-relaxed text-right">
-                  These reviews cost you revenue. Fix them before they spiral.
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-purple-500/20 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                </svg>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div style={{ opacity: rightAnnotation2Opacity, x: useTransform(rightAnnotation2Opacity, [0, 1], [20, 0]) }}>
-            <div className="flex items-start gap-3">
-              <div>
-                <p className="text-sm font-semibold text-white text-right">Priority Sorting</p>
-                <p className="text-xs text-neutral-400 leading-relaxed text-right">
-                  Critical issues bubble up automatically based on impact
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
-                </svg>
-              </div>
-            </div>
-          </motion.div>
-
-          <motion.div style={{ opacity: rightAnnotation3Opacity, x: useTransform(rightAnnotation3Opacity, [0, 1], [20, 0]) }}>
-            <div className="flex items-start gap-3">
-              <div>
-                <p className="text-sm font-semibold text-white text-right">Ship Faster</p>
-                <p className="text-xs text-neutral-400 leading-relaxed text-right">
-                  No more manual review analysis. Focus on building fixes.
-                </p>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-pink-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-            </div>
-          </motion.div>
-        </div>
+        {/* Particle Field */}
+        <ParticleField />
 
         {/* ================================================================ */}
-        {/* PHONE SHELL */}
+        {/* PHONE SHELL - PREMIUM CSS FRAME */}
         {/* ================================================================ */}
         <motion.div
-          className="relative z-10"
+          className={`relative z-10 phone-float ${isScrolling ? 'phone-float-paused' : ''}`}
           style={{
             width: PHONE.WIDTH,
             height: PHONE.HEIGHT,
             scale: phoneScale,
-            borderRadius: phoneBorderRadius,
-            boxShadow: phoneShadow,
+            willChange: "transform",
+            isolation: "isolate",
           }}
         >
-          {/* Phone Body */}
-          <motion.div
-            className="absolute inset-0 bg-neutral-900 overflow-hidden"
-            style={{ borderRadius: phoneBorderRadius }}
+          {/* Phone Frame Wrapper - THE visible phone shell */}
+          <div
+            style={{
+              position: 'relative',
+              width: '100%',
+              height: '100%',
+              borderRadius: '44px',
+              background: 'linear-gradient(145deg, #1a1a1a 0%, #0d0d0d 100%)',
+              boxShadow: `
+                0 0 0 1px rgba(255,255,255,0.08),
+                0 0 0 2px rgba(0,0,0,0.8),
+                0 0 0 3px rgba(255,255,255,0.04),
+                0 50px 100px rgba(0,0,0,0.9),
+                0 0 80px rgba(249,115,22,0.06)
+              `,
+              padding: '12px',
+            }}
           >
-            {/* Bezel */}
-            <div 
-              className="absolute inset-0 border border-neutral-700/30 pointer-events-none z-50"
-              style={{ borderRadius: "inherit" }}
-            />
-
-            {/* Notch */}
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 z-50">
-              <div 
-                className="bg-black rounded-b-xl flex items-center justify-center"
-                style={{ width: PHONE.NOTCH_WIDTH, height: PHONE.NOTCH_HEIGHT }}
-              >
-                <div className="w-2 h-2 rounded-full bg-neutral-800" />
-              </div>
+            {/* Camera Notch */}
+            <div style={{
+              position: 'absolute',
+              top: '14px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '90px',
+              height: '28px',
+              background: '#000',
+              borderRadius: '20px',
+              zIndex: 10,
+              boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)'
+            }}>
+              {/* Camera Lens */}
+              <div style={{
+                position: 'absolute',
+                right: '18px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: '#1a1a2e',
+                boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.1), 0 0 4px rgba(100,150,255,0.2)'
+              }} />
             </div>
 
-            {/* Home Indicator */}
-            <div className="absolute bottom-1.5 left-1/2 -translate-x-1/2 w-20 h-1 bg-neutral-700 rounded-full z-50" />
+            {/* Screen Area - Content Container */}
+            <div style={{
+              borderRadius: '32px',
+              overflow: 'hidden',
+              background: '#000',
+              position: 'relative',
+              height: 'calc(100% - 40px)',
+            }}>
+              {/* Glass Sheen at top of screen */}
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: '35%',
+                zIndex: 5,
+                pointerEvents: 'none',
+                background: 'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 100%)',
+              }} />
 
-            {/* ============================================================ */}
-            {/* SCREEN CONTENT */}
-            {/* ============================================================ */}
-            <div className="absolute inset-0 overflow-hidden" style={{ borderRadius: "inherit" }}>
+              {/* Screen Glow - Reactive to content */}
+              <div
+                className="absolute inset-x-4 -bottom-8 h-16 pointer-events-none transition-all duration-1000 ease-in-out"
+                style={{
+                  background: isInResolvedPhase 
+                    ? 'radial-gradient(ellipse 200px 100px at 50% 50%, rgba(34, 197, 94, 0.12), transparent)'
+                    : isInCriticalPhase
+                    ? 'radial-gradient(ellipse 200px 100px at 50% 50%, rgba(239, 68, 68, 0.15), transparent)'
+                    : 'none',
+                  filter: 'blur(20px)',
+                }}
+              />
+
+              {/* ============================================================ */}
+              {/* SCREEN CONTENT */}
+              {/* ============================================================ */}
+              <div className="absolute inset-0 overflow-hidden" style={{ borderRadius: '32px' }}>
               
               {/* Layer 1: Lock Screen */}
               <motion.div
@@ -1175,6 +1291,7 @@ export function PhoneMockup() {
                 style={{ 
                   opacity: lockOpacity,
                   scale: lockScale,
+                  pointerEvents: 'none'
                 }}
               >
                 <LockScreen />
@@ -1186,18 +1303,73 @@ export function PhoneMockup() {
                 style={{ 
                   opacity: storeOpacity,
                   scale: storeScale,
+                  pointerEvents: 'none'
                 }}
               >
                 <motion.div
                   className="absolute inset-x-0 top-0"
                   style={{ y: storeScrollY }}
                 >
-                  <PlayStoreContent scrollY={0} scrollProgress={scrollYProgress.get()} />
+                  <PlayStoreContent scrollY={0} scrollProgress={0} />
                 </motion.div>
               </motion.div>
 
             </div>
-          </motion.div>
+            {/* End of SCREEN CONTENT div */}
+
+          </div>
+          {/* End of Screen Area - Content Container */}
+
+            {/* Right Side Buttons */}
+            <div style={{
+              position: 'absolute',
+              right: '-3px',
+              top: '120px',
+              width: '3px',
+              height: '32px',
+              background: 'rgba(255,255,255,0.08)',
+              borderRadius: '0 2px 2px 0'
+            }} />
+            <div style={{
+              position: 'absolute',
+              right: '-3px',
+              top: '164px',
+              width: '3px',
+              height: '32px',
+              background: 'rgba(255,255,255,0.08)',
+              borderRadius: '0 2px 2px 0'
+            }} />
+            
+            {/* Left Side Power Button */}
+            <div style={{
+              position: 'absolute',
+              left: '-3px',
+              top: '140px',
+              width: '3px',
+              height: '52px',
+              background: 'rgba(255,255,255,0.08)',
+              borderRadius: '2px 0 0 2px'
+            }} />
+
+            {/* Bottom Home Indicator Area */}
+            <div style={{
+              display: 'flex',
+              justifyContent: 'center',
+              paddingTop: '8px',
+              paddingBottom: '4px',
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0
+            }}>
+              <div style={{
+                width: '120px',
+                height: '4px',
+                borderRadius: '2px',
+                background: 'rgba(255,255,255,0.15)'
+              }} />
+            </div>
+          </div>
         </motion.div>
       </div>
     </section>

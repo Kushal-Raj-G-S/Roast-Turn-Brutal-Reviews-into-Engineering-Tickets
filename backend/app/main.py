@@ -32,8 +32,8 @@ async def lifespan(app: FastAPI):
     
     # Initialize v1 (legacy) bulk processing API
     try:
-        from app.bulk_api import init_bulk_api, get_engine_instance
-        from app.bulk_worker import start_worker, stop_worker
+        from app.api.bulk_api import init_bulk_api, get_engine_instance
+        from app.workers.bulk_worker import start_worker, stop_worker
         
         init_bulk_api(app)
         logger.info("✅ v1 (legacy) bulk processing API initialized")

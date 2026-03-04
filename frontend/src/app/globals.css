@@ -183,6 +183,7 @@
   --font-mono: var(--font-azeret);
   --font-heading: var(--font-space);
   --font-display: var(--font-blackops);
+  --font-playfair: var(--font-playfair);
 }
 
 /* ============================================================================
@@ -220,6 +221,15 @@ body {
   font-family: var(--font-mono), monospace;
   font-weight: 500;
   letter-spacing: 0em;
+}
+
+.font-playfair {
+  font-family: var(--font-playfair), serif;
+}
+
+/* Apply Playfair to all h1 and h2 elements */
+h1, h2 {
+  font-family: var(--font-playfair), serif;
 }
 
 /* Clean animations - no chapri glow */
@@ -347,3 +357,199 @@ body {
   mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 30%, transparent 100%);
   -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 30%, transparent 100%);
 }
+
+/* ============================================================================
+   PREMIUM UPGRADES - Agency-Grade Visuals
+   ============================================================================ */
+
+/* Animated Mesh Gradient Background */
+.mesh-gradient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: #0a0a0a;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.mesh-gradient::before,
+.mesh-gradient::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+.mesh-gradient::before {
+  width: 50%;
+  height: 50%;
+  top: -10%;
+  right: -10%;
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.05) 0%, transparent 70%);
+  animation: mesh-orb-1 18s;
+}
+
+.mesh-gradient::after {
+  width: 40%;
+  height: 40%;
+  bottom: -5%;
+  left: -5%;
+  background: radial-gradient(circle, rgba(220, 38, 38, 0.03) 0%, transparent 70%);
+  animation: mesh-orb-2 15s;
+}
+
+@keyframes mesh-orb-1 {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-10%, 10%) scale(1.1);
+  }
+}
+
+@keyframes mesh-orb-2 {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(10%, -10%) scale(1.15);
+  }
+}
+
+/* Severity Badge Pulse Animation */
+@keyframes badge-pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.badge-critical {
+  animation: badge-pulse 0.5s ease-out;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+}
+
+.badge-high {
+  animation: badge-pulse 0.5s ease-out 0.1s;
+}
+
+.badge-medium {
+  animation: badge-pulse 0.5s ease-out 0.2s;
+}
+
+/* CTA Section Rotating Gradient */
+.rotating-gradient {
+  position: relative;
+  overflow: hidden;
+}
+
+.rotating-gradient::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, rgba(249,115,22,0.2) 0%, rgba(220,38,38,0.1) 40%, transparent 70%);
+  animation: rotate-gradient 8s linear infinite;
+  z-index: -1;
+}
+
+@keyframes rotate-gradient {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* Hover glow for CTA button */
+.cta-button-glow:hover {
+  box-shadow: 0 0 20px rgba(249, 115, 22, 0.5);
+}
+
+/* Letter-spaced text utility */
+.text-spaced {
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  color: rgba(249, 115, 22, 0.7);
+  font-weight: 600;
+}
+
+/* Feature card hover effects */
+.feature-card {
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 0 30px rgba(249, 115, 22, 0.15);
+  border-color: rgba(249, 115, 22, 0.4);
+}
+
+/* Phone mockup isolation - ensure stacking context */
+.phone-mockup-wrapper {
+  isolation: isolate;
+  position: relative;
+  z-index: 1;
+}
+
+/* Phone floating animation */
+@keyframes phoneFloat {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.phone-float {
+  animation: phoneFloat 4s ease-in-out infinite;
+}
+
+.phone-float-paused {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phone-float {
+    animation: none;
+  }
+}
+
+/* Particle floating animation - generic */
+@keyframes particleFloat {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.6;
+    transform: translate(var(--drift-x, 20px), -40px);
+  }
+  90% {
+    opacity: 0.3;
+  }
+  100% {
+    transform: translate(calc(var(--drift-x, 20px) * 1.5), -80px);
+    opacity: 0;
+  }
+}
+
+.particle {
+  animation: particleFloat var(--duration, 8s) ease-in-out infinite;
+  animation-delay: var(--delay, 0s);
+}
+

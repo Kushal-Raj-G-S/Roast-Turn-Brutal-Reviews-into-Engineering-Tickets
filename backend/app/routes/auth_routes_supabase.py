@@ -5,17 +5,17 @@ Authentication routes using Supabase Auth.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.supabase_client import supabase
-from app.schemas_supabase import (
+from app.database.database import get_db
+from app.database.supabase_client import supabase
+from app.models.schemas_supabase import (
     UserSignup,
     UserLogin,
     GoogleAuthCallback,
     TokenResponse,
     UserResponse
 )
-from app.auth_supabase import get_current_user
-from app.models_supabase import Profile
+from app.database.auth_supabase import get_current_user
+from app.models.models_supabase import Profile
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 

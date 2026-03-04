@@ -20,10 +20,13 @@ import {
   FileText,
   ChevronDown,
   ChevronUp,
-  Star
+  Star,
+  Layers,
+  Sparkles,
+  ArrowRight
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
 import { supabase } from "@/lib/supabase/client";
 import { SpotlightCard } from "@/components/ui";
@@ -81,6 +84,7 @@ type AnalyticsData = {
 
 export default function AnalyticsPage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const uploadId = searchParams?.get('upload_id');
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -154,6 +158,12 @@ export default function AnalyticsPage() {
               total_reviews: uploadData?.total_reviews,
               filtered_noise: uploadData?.filtered_noise,
             }
+          });
+          
+          console.log('[Analytics] Upload data:', {
+            upload_id: uploadId,
+            total_reviews: uploadData?.total_reviews,
+            filtered_noise: uploadData?.filtered_noise,
           });
         }
       } else {
@@ -278,49 +288,74 @@ export default function AnalyticsPage() {
     severity_distribution.low;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 pb-12">
       {/* Page Header with Upload Info */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5 }}
       >
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-white mb-2">Analytics Dashboard</h1>
+            <h1 className="text-4xl font-bold text-white mb-2 bg-gradient-to-r from-white to-neutral-400 bg-clip-text text-transparent">
+              Analytics Dashboard
+            </h1>
             <p className="text-neutral-400">
               {uploadId 
-                ? `Showing results for Upload #${uploadId} • ${user_statistics.total_reviews_analyzed.toLocaleString()} reviews processed`
+                ? (
+                  <span className="flex items-center gap-2">
+                    <span className="font-semibold text-white">
+                      {analytics?.upload_data?.filename
+                        ? analytics.upload_data.filename.replace(/\.csv$/i, '')
+                        : `Upload #${uploadId}`}
+                    </span>
+                    <span className="text-neutral-600">•</span>
+                    <span>{user_statistics.total_reviews_analyzed.toLocaleString()} reviews processed</span>
+                  </span>
+                )
                 : "Comprehensive insights and trends from all your reviews"
               }
             </p>
-            {analytics.upload_data?.processing_time_seconds && (
-              <p className="text-sm text-green-400 mt-1">
-                ⚡ Processed in {analytics.upload_data.processing_time_seconds}s
-                {analytics.upload_data.filtered_noise && (
-                  <span className="text-neutral-500"> • Filtered {analytics.upload_data.filtered_noise} noise reviews</span>
-                )}
-              </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {/* AI Debug Center Button */}
+            <motion.button
+              onClick={() => router.push(uploadId ? `/ai-debug?upload_id=${uploadId}` : '/ai-debug')}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-orange-500/20 to-purple-500/20 border border-orange-500/30 hover:border-orange-500/50 transition-all group"
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+            >
+              <Sparkles className="w-4 h-4 text-orange-400 group-hover:text-orange-300 transition-colors" />
+              <span className="text-sm font-semibold text-white">AI Debug Center</span>
+              <ArrowRight className="w-4 h-4 text-orange-400 group-hover:translate-x-0.5 transition-transform" />
+            </motion.button>
+            
+            {uploadId && (
+              <motion.div 
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-500/20 to-red-500/20 border border-orange-500/30"
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ delay: 0.2 }}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
+                  <span className="text-sm font-medium text-orange-300">Latest Upload</span>
+                </div>
+              </motion.div>
             )}
           </div>
-          {uploadId && (
-            <div className="px-4 py-2 rounded-xl bg-gradient-to-r from-orange-500/20 to-red-500/20 border border-orange-500/30">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
-                <span className="text-sm font-medium text-orange-300">Latest Upload</span>
-              </div>
-            </div>
-          )}
         </div>
       </motion.div>
 
-      {/* Key Metrics - Enhanced */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Key Metrics - 4 Column Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
+          transition={{ delay: 0.1, duration: 0.4 }}
+          whileHover={{ y: -4, transition: { duration: 0.2 } }}
         >
-          <SpotlightCard className="p-6 relative overflow-hidden">
+          <SpotlightCard className="p-6 relative overflow-hidden h-full">
             <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-blue-500/10 to-transparent rounded-full blur-2xl"></div>
             <div className="relative">
               <div className="flex items-start justify-between mb-4">
@@ -337,7 +372,12 @@ export default function AnalyticsPage() {
               </p>
               <div className="flex items-center gap-2 mt-3">
                 <div className="flex-1 h-1 rounded-full bg-blue-500/20">
-                  <div className="h-full w-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-500"></div>
+                  <motion.div 
+                    className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-500"
+                    initial={{ width: 0 }}
+                    animate={{ width: "100%" }}
+                    transition={{ delay: 0.3, duration: 0.8, ease: "easeOut" }}
+                  ></motion.div>
                 </div>
                 <span className="text-xs text-blue-400 font-medium">100%</span>
               </div>
@@ -348,9 +388,10 @@ export default function AnalyticsPage() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
+          transition={{ delay: 0.15, duration: 0.4 }}
+          whileHover={{ y: -4, transition: { duration: 0.2 } }}
         >
-          <SpotlightCard className="p-6 relative overflow-hidden">
+          <SpotlightCard className="p-6 relative overflow-hidden h-full">
             <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-orange-500/10 to-transparent rounded-full blur-2xl"></div>
             <div className="relative">
               <div className="flex items-start justify-between mb-4">
@@ -362,9 +403,14 @@ export default function AnalyticsPage() {
                 </div>
               </div>
               <p className="text-sm text-neutral-400 mb-2">Issues Detected</p>
-              <p className="text-4xl font-black text-white mb-1">
+              <motion.p 
+                className="text-4xl font-black text-white mb-1"
+                initial={{ opacity: 0, scale: 0.5 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.4, duration: 0.5, type: "spring" }}
+              >
                 {user_statistics.total_issues_found}
-              </p>
+              </motion.p>
               <div className="flex items-center gap-2 mt-3">
                 <Flame className="w-3 h-3 text-orange-400" />
                 <span className="text-xs text-neutral-500">
@@ -378,9 +424,10 @@ export default function AnalyticsPage() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
+          transition={{ delay: 0.2, duration: 0.4 }}
+          whileHover={{ y: -4, transition: { duration: 0.2 } }}
         >
-          <SpotlightCard className="p-6 relative overflow-hidden">
+          <SpotlightCard className="p-6 relative overflow-hidden h-full">
             <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-amber-500/10 to-transparent rounded-full blur-2xl"></div>
             <div className="relative">
               <div className="flex items-start justify-between mb-4">
@@ -396,9 +443,14 @@ export default function AnalyticsPage() {
                 </div>
               </div>
               <p className="text-sm text-neutral-400 mb-2">Noise Filtered</p>
-              <p className="text-4xl font-black text-white mb-1">
+              <motion.p 
+                className="text-4xl font-black text-white mb-1"
+                initial={{ opacity: 0, scale: 0.5 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.45, duration: 0.5, type: "spring" }}
+              >
                 {analytics?.upload_data?.filtered_noise || 0}
-              </p>
+              </motion.p>
               <div className="flex items-center gap-2 mt-3">
                 <span className="text-xs text-neutral-500">
                   {analytics?.upload_data?.total_reviews && analytics?.upload_data?.filtered_noise
@@ -414,9 +466,10 @@ export default function AnalyticsPage() {
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.25 }}
+          transition={{ delay: 0.25, duration: 0.4 }}
+          whileHover={{ y: -4, transition: { duration: 0.2 } }}
         >
-          <SpotlightCard className="p-6 relative overflow-hidden">
+          <SpotlightCard className="p-6 relative overflow-hidden h-full">
             <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-purple-500/10 to-transparent rounded-full blur-2xl"></div>
             <div className="relative">
               <div className="flex items-start justify-between mb-4">
@@ -424,377 +477,360 @@ export default function AnalyticsPage() {
                   <Activity className="w-6 h-6 text-purple-400" />
                 </div>
                 <div className="text-right">
-                  <p className="text-xs text-neutral-500 uppercase tracking-wider">Avg</p>
+                  <p className="text-xs text-neutral-500 uppercase tracking-wider">Total</p>
                 </div>
               </div>
-              <p className="text-sm text-neutral-400 mb-2">Avg Sentiment</p>
-              <p className="text-4xl font-black text-white mb-1">
-                {(() => {
-                  const score = user_statistics.average_sentiment_score;
-                  if (score === 0) {
-                    // Calculate from ratings if available
-                    const total = user_statistics.rating_1_count + user_statistics.rating_2_count + 
-                                  user_statistics.rating_3_count + user_statistics.rating_4_count + 
-                                  user_statistics.rating_5_count;
-                    if (total > 0) {
-                      const weightedSum = (user_statistics.rating_1_count * -1) + 
-                                         (user_statistics.rating_2_count * -0.5) + 
-                                         (user_statistics.rating_3_count * 0) + 
-                                         (user_statistics.rating_4_count * 0.5) + 
-                                         (user_statistics.rating_5_count * 1);
-                      return (weightedSum / total).toFixed(2);
-                    }
-                  }
-                  return score.toFixed(2);
-                })()}
-              </p>
+              <p className="text-sm text-neutral-400 mb-2">Clusters Created</p>
+              <motion.p 
+                className="text-4xl font-black text-white mb-1"
+                initial={{ opacity: 0, scale: 0.5 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.5, duration: 0.5, type: "spring" }}
+              >
+                {analytics?.clusters?.length || 0}
+              </motion.p>
               <div className="flex items-center gap-2 mt-3">
-                <span className="text-xs text-neutral-500">-1.0 (negative) to +1.0 (positive)</span>
+                <span className="text-xs text-neutral-500">AI-grouped review patterns</span>
               </div>
             </div>
           </SpotlightCard>
         </motion.div>
       </div>
 
-      {/* Charts Row - Enhanced Severity Distribution */}
+      {/* ── Row 1: #1 User Complaint — full width ── */}
+      {(() => {
+        const clusters = analytics.clusters || [];
+        const totalReviews = clusters.reduce((s, c) => s + (c.review_count || 0), 0);
+
+        const cleanTitle = (t: string) =>
+          t.replace(/^\[(CRITICAL|HIGH|MEDIUM|LOW)\]\s*(Issue:\s*)?/i, '')
+           .replace(/^Issue:\s*/i, '')
+           .trim();
+
+        const severityMeta: Record<string, { label: string; color: string; bg: string; border: string; dot: string; textBg: string }> = {
+          critical: { label: 'CRITICAL', color: 'text-red-400',     bg: 'bg-red-500/10',    border: 'border-red-500/25',    dot: 'bg-red-500',    textBg: 'bg-red-500/15' },
+          high:     { label: 'HIGH',     color: 'text-orange-400',  bg: 'bg-orange-500/10', border: 'border-orange-500/25', dot: 'bg-orange-500', textBg: 'bg-orange-500/15' },
+          medium:   { label: 'MEDIUM',   color: 'text-yellow-400',  bg: 'bg-yellow-500/10', border: 'border-yellow-500/25', dot: 'bg-yellow-500', textBg: 'bg-yellow-500/15' },
+          low:      { label: 'LOW',      color: 'text-blue-400',    bg: 'bg-blue-500/10',   border: 'border-blue-500/25',   dot: 'bg-blue-500',   textBg: 'bg-blue-500/15' },
+        };
+        const statusEmoji: Record<string, string> = { fresh_roast: '🔥', assigned: '👤', in_progress: '🔄', resolved: '✅', wont_fix: '🚫' };
+        const statusLabel: Record<string, string> = { fresh_roast: 'Fresh Roast', assigned: 'Assigned', in_progress: 'In Progress', resolved: 'Resolved', wont_fix: "Won't Fix" };
+
+        if (clusters.length === 0 || totalReviews === 0) return null;
+
+        const sorted = [...clusters].sort((a, b) => (b.review_count || 0) - (a.review_count || 0));
+        const top = sorted[0];
+        const runners = sorted.slice(1, 5); // exactly 4 runner-ups → clean 4-col row
+        const topMeta = severityMeta[top.severity] ?? severityMeta.low;
+        const topPct = Math.round(((top.review_count || 0) / totalReviews) * 100);
+
+        return (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3, duration: 0.5 }}
+          >
+            <SpotlightCard className="p-6">
+              {/* Card header */}
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-red-500/20 to-orange-500/20 border border-red-500/20 flex items-center justify-center">
+                    <Flame className="w-4 h-4 text-red-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white">#1 User Complaint</h3>
+                    <p className="text-xs text-neutral-500">Loudest cluster by review volume · {totalReviews.toLocaleString()} total reviews</p>
+                  </div>
+                </div>
+                <span className={`text-xs font-black px-2.5 py-1 rounded-full border ${topMeta.color} ${topMeta.textBg} ${topMeta.border}`}>
+                  {topMeta.label}
+                </span>
+              </div>
+
+              {/* Top complaint — horizontal split */}
+              <motion.div
+                className={`rounded-xl border ${topMeta.border} ${topMeta.bg} mb-5`}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+              >
+                <div className="flex flex-col lg:flex-row lg:items-center gap-4 p-5">
+                  {/* Title */}
+                  <p className="flex-1 text-lg font-bold text-white leading-snug">
+                    &ldquo;{cleanTitle(top.title)}&rdquo;
+                  </p>
+                  {/* Stats */}
+                  <div className="flex items-center gap-6 flex-shrink-0">
+                    <div className="text-center">
+                      <p className={`text-2xl font-black ${topMeta.color}`}>{topPct}%</p>
+                      <p className="text-xs text-neutral-500">of total</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-2xl font-black text-white">{(top.review_count || 0).toLocaleString()}</p>
+                      <p className="text-xs text-neutral-500">reviews</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-lg">{statusEmoji[top.status] ?? '❓'}</p>
+                      <p className="text-xs text-neutral-500">{statusLabel[top.status] ?? top.status}</p>
+                    </div>
+                  </div>
+                </div>
+                {/* Progress bar */}
+                <div className="px-5 pb-4">
+                  <div className="h-2 rounded-full bg-white/5">
+                    <motion.div
+                      className={`h-full rounded-full ${topMeta.dot}`}
+                      initial={{ width: 0 }}
+                      animate={{ width: `${topPct}%` }}
+                      transition={{ delay: 0.4, duration: 0.9, ease: 'easeOut' }}
+                    />
+                  </div>
+                </div>
+              </motion.div>
+
+              {/* 4 runner-ups in a single even row */}
+              <div>
+                <p className="text-xs text-neutral-600 uppercase tracking-wider mb-3">Next biggest</p>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  {runners.map((c, i) => {
+                    const meta = severityMeta[c.severity] ?? severityMeta.low;
+                    const pct = Math.round(((c.review_count || 0) / totalReviews) * 100);
+                    const relPct = Math.round(((c.review_count || 0) / (top.review_count || 1)) * 100);
+                    return (
+                      <motion.div
+                        key={c.id}
+                        className={`rounded-xl p-3.5 border ${meta.border} ${meta.bg} flex flex-col gap-2`}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.35 + i * 0.06 }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-neutral-600 font-bold">#{i + 2}</span>
+                          <span className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${meta.color} ${meta.textBg} ${meta.border}`}>{meta.label}</span>
+                        </div>
+                        <p className="text-xs text-neutral-200 leading-relaxed line-clamp-3 flex-1">{cleanTitle(c.title)}</p>
+                        <div>
+                          <div className="flex justify-between text-[10px] text-neutral-600 mb-1">
+                            <span>{(c.review_count || 0).toLocaleString()} reviews</span>
+                            <span>{pct}%</span>
+                          </div>
+                          <div className="h-1 rounded-full bg-white/5">
+                            <motion.div
+                              className={`h-full rounded-full ${meta.dot}`}
+                              initial={{ width: 0 }}
+                              animate={{ width: `${relPct}%` }}
+                              transition={{ delay: 0.45 + i * 0.06, duration: 0.6 }}
+                            />
+                          </div>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </div>
+            </SpotlightCard>
+          </motion.div>
+        );
+      })()}
+
+      {/* ── Row 2: Severity Distribution + Issue Categories — equal 2-col ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Severity Distribution */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
+          initial={{ opacity: 0, x: -16 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.38, duration: 0.5 }}
         >
           <SpotlightCard className="p-6 h-full">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-red-500/20 to-orange-500/20 border border-red-500/20 flex items-center justify-center">
-                  <Flame className="w-5 h-5 text-red-400" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-white">Severity Distribution</h3>
-                  <p className="text-sm text-neutral-500">{totalSeverity} total issues categorized</p>
-                </div>
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-red-500/20 to-orange-500/20 border border-red-500/20 flex items-center justify-center">
+                <Flame className="w-4 h-4 text-red-400" />
               </div>
-              <div className="text-right">
-                <p className="text-2xl font-black text-white">{totalSeverity}</p>
-                <p className="text-xs text-neutral-500">Issues</p>
+              <div>
+                <h3 className="font-bold text-white">Severity Distribution</h3>
+                <p className="text-xs text-neutral-500">{totalSeverity} total issues categorized</p>
               </div>
             </div>
 
             {totalSeverity > 0 ? (() => {
-              // Calculate max count for relative bar scaling (max severity gets 100% bar width)
               const maxCount = Math.max(
                 severity_distribution.critical,
                 severity_distribution.high,
                 severity_distribution.medium,
                 severity_distribution.low
               );
-              
+              const rows = [
+                { key: 'critical', label: 'Critical', count: severity_distribution.critical, color: 'text-red-400',    bar: 'from-red-600 to-red-400',       dot: 'bg-red-500',    delay: 0.4 },
+                { key: 'high',     label: 'High',     count: severity_distribution.high,     color: 'text-orange-400', bar: 'from-orange-600 to-orange-400', dot: 'bg-orange-500', delay: 0.48 },
+                { key: 'medium',   label: 'Medium',   count: severity_distribution.medium,   color: 'text-yellow-400', bar: 'from-yellow-600 to-yellow-400', dot: 'bg-yellow-500', delay: 0.56 },
+                { key: 'low',      label: 'Low',      count: severity_distribution.low,      color: 'text-blue-400',   bar: 'from-blue-600 to-blue-400',     dot: 'bg-blue-500',   delay: 0.64 },
+              ];
               return (
-              <div className="space-y-4">
-                {/* Critical */}
-                <div className="group hover:bg-red-500/5 p-3 rounded-lg transition-colors">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-red-500 shadow-lg shadow-red-500/50"></div>
-                      <span className="text-sm font-bold text-red-400 uppercase tracking-wider">Critical</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg font-black text-white">{severity_distribution.critical}</span>
-                      <span className="text-sm font-bold text-red-400 min-w-[45px] text-right">
-                        {Math.round((severity_distribution.critical / totalSeverity) * 100)}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="h-3 rounded-full bg-white/5 overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${(severity_distribution.critical / maxCount) * 100}%` }}
-                      transition={{ duration: 0.8, delay: 0.3 }}
-                      className="h-full bg-gradient-to-r from-red-600 via-red-500 to-red-400 rounded-full shadow-lg shadow-red-500/30"
-                    />
-                  </div>
-                </div>
-
-                {/* High */}
-                <div className="group hover:bg-orange-500/5 p-3 rounded-lg transition-colors">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-orange-500 shadow-lg shadow-orange-500/50"></div>
-                      <span className="text-sm font-bold text-orange-400 uppercase tracking-wider">High</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg font-black text-white">{severity_distribution.high}</span>
-                      <span className="text-sm font-bold text-orange-400 min-w-[45px] text-right">
-                        {Math.round((severity_distribution.high / totalSeverity) * 100)}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="h-3 rounded-full bg-white/5 overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${(severity_distribution.high / maxCount) * 100}%` }}
-                      transition={{ duration: 0.8, delay: 0.4 }}
-                      className="h-full bg-gradient-to-r from-orange-600 via-orange-500 to-orange-400 rounded-full shadow-lg shadow-orange-500/30"
-                    />
-                  </div>
-                </div>
-
-                {/* Medium */}
-                <div className="group hover:bg-yellow-500/5 p-3 rounded-lg transition-colors">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-yellow-500 shadow-lg shadow-yellow-500/50"></div>
-                      <span className="text-sm font-bold text-yellow-400 uppercase tracking-wider">Medium</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg font-black text-white">{severity_distribution.medium}</span>
-                      <span className="text-sm font-bold text-yellow-400 min-w-[45px] text-right">
-                        {Math.round((severity_distribution.medium / totalSeverity) * 100)}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="h-3 rounded-full bg-white/5 overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${(severity_distribution.medium / maxCount) * 100}%` }}
-                      transition={{ duration: 0.8, delay: 0.5 }}
-                      className="h-full bg-gradient-to-r from-yellow-600 via-yellow-500 to-yellow-400 rounded-full shadow-lg shadow-yellow-500/30"
-                    />
-                  </div>
-                </div>
-
-                {/* Low */}
-                <div className="group hover:bg-blue-500/5 p-3 rounded-lg transition-colors">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-blue-500 shadow-lg shadow-blue-500/50"></div>
-                      <span className="text-sm font-bold text-blue-400 uppercase tracking-wider">Low</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg font-black text-white">{severity_distribution.low}</span>
-                      <span className="text-sm font-bold text-blue-400 min-w-[45px] text-right">
-                        {Math.round((severity_distribution.low / totalSeverity) * 100)}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="h-3 rounded-full bg-white/5 overflow-hidden">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${(severity_distribution.low / maxCount) * 100}%` }}
-                      transition={{ duration: 0.8, delay: 0.6 }}
-                      className="h-full bg-gradient-to-r from-blue-600 via-blue-500 to-blue-400 rounded-full shadow-lg shadow-blue-500/30"
-                    />
-                  </div>
-                </div>
-              </div>
-              );
-            })() : (
-              <p className="text-neutral-500 text-center py-12">No severity data available</p>
-            )}
-          </SpotlightCard>
-        </motion.div>
-
-        {/* Status Distribution */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.35 }}
-        >
-          <SpotlightCard className="p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500/20 to-green-500/20 border border-emerald-500/20 flex items-center justify-center">
-                <Target className="w-5 h-5 text-emerald-400" />
-              </div>
-              <div>
-                <h3 className="font-bold text-white">Issue Status</h3>
-                <p className="text-sm text-neutral-500">Current workflow state</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="p-4 rounded-xl bg-orange-500/10 border border-orange-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Flame className="w-4 h-4 text-orange-400" />
-                  <span className="text-xs text-neutral-400">Fresh Roast</span>
-                </div>
-                <p className="text-2xl font-bold text-white">{status_distribution.fresh_roast}</p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Target className="w-4 h-4 text-blue-400" />
-                  <span className="text-xs text-neutral-400">Assigned</span>
-                </div>
-                <p className="text-2xl font-bold text-white">{status_distribution.assigned}</p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Clock className="w-4 h-4 text-yellow-400" />
-                  <span className="text-xs text-neutral-400">In Progress</span>
-                </div>
-                <p className="text-2xl font-bold text-white">{status_distribution.in_progress}</p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span className="text-xs text-neutral-400">Resolved</span>
-                </div>
-                <p className="text-2xl font-bold text-white">{status_distribution.resolved}</p>
-              </div>
-            </div>
-          </SpotlightCard>
-        </motion.div>
-      </div>
-
-      {/* Rating Distribution & Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Rating Distribution */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-        >
-          <SpotlightCard className="p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500/20 to-yellow-500/20 border border-amber-500/20 flex items-center justify-center">
-                <PieChart className="w-5 h-5 text-amber-400" />
-              </div>
-              <div>
-                <h3 className="font-bold text-white">Rating Distribution</h3>
-                <p className="text-sm text-neutral-500">{totalRatings.toLocaleString()} total ratings</p>
-              </div>
-            </div>
-
-            {totalRatings > 0 ? (
-              <div className="space-y-3">
-                {[5, 4, 3, 2, 1].map((rating) => {
-                  const percentage = getRatingPercentage(rating);
-                  const count = getRatingCount(rating);
-                  
-                  return (
-                    <div key={rating}>
-                      <div className="flex items-center justify-between mb-1">
+                <div className="space-y-4">
+                  {rows.map(r => (
+                    <div key={r.key}>
+                      <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm text-neutral-300">{rating} ⭐</span>
+                          <div className={`w-2.5 h-2.5 rounded-full ${r.dot}`} />
+                          <span className={`text-sm font-bold ${r.color} uppercase tracking-wide`}>{r.label}</span>
                         </div>
-                        <span className="text-sm text-neutral-400">
-                          {count} ({percentage.toFixed(1)}%)
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-base font-black text-white">{r.count}</span>
+                          <span className={`text-sm font-bold ${r.color} w-10 text-right`}>
+                            {Math.round((r.count / totalSeverity) * 100)}%
+                          </span>
+                        </div>
                       </div>
-                      <div className="h-2 rounded-full bg-white/5 overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-amber-500 to-yellow-500 rounded-full"
-                          style={{ width: `${percentage}%` }}
+                      <div className="h-2.5 rounded-full bg-white/5 overflow-hidden">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(r.count / maxCount) * 100}%` }}
+                          transition={{ duration: 0.75, delay: r.delay }}
+                          className={`h-full bg-gradient-to-r ${r.bar} rounded-full`}
                         />
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="text-neutral-500 text-center py-8">No ratings data available</p>
+                  ))}
+                </div>
+              );
+            })() : (
+              <p className="text-neutral-500 text-center py-10 text-sm">No data</p>
             )}
           </SpotlightCard>
         </motion.div>
 
-        {/* Recent Activity */}
+        {/* Issue Categories */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.45 }}
+          initial={{ opacity: 0, x: 16 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.42, duration: 0.5 }}
         >
-          <SpotlightCard className="p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500/20 to-blue-500/20 border border-cyan-500/20 flex items-center justify-center">
-                <TrendingUp className="w-5 h-5 text-cyan-400" />
-              </div>
-              <div>
-                <h3 className="font-bold text-white">Recent Activity</h3>
-                <p className="text-sm text-neutral-500">Latest uploads and analysis</p>
-              </div>
-            </div>
+          <SpotlightCard className="p-6 h-full">
+            {(() => {
+              const clusters = analytics.clusters || [];
+              const categoryRules: { label: string; icon: string; color: string; bar: string; keywords: string[] }[] = [
+                { label: 'Crashes & Errors',   icon: '💥', color: 'text-red-400',     bar: 'bg-red-500',     keywords: ['crash','crashing','not open','force close','freeze','stuck','black screen','not working','broken'] },
+                { label: 'Performance',         icon: '🐢', color: 'text-orange-400',  bar: 'bg-orange-500',  keywords: ['lag','slow','loading','battery','hang','performance','takes long','drains'] },
+                { label: 'Ads',                 icon: '📢', color: 'text-yellow-400',  bar: 'bg-yellow-500',  keywords: ['ad','ads','advertisement','popup','pop-up','too many ads','annoying ad','banner'] },
+                { label: 'Login / Account',     icon: '🔐', color: 'text-cyan-400',    bar: 'bg-cyan-500',    keywords: ['login','sign in','sign out','account','password','otp','verify','logout','session'] },
+                { label: 'Payments',            icon: '💸', color: 'text-emerald-400', bar: 'bg-emerald-500', keywords: ['pay','paid','purchase','subscription','refund','charge','money','buy','coin','gem','booster','reward'] },
+                { label: 'Gameplay / Features', icon: '🎮', color: 'text-purple-400',  bar: 'bg-purple-500',  keywords: ['level','game','play','lives','score','feature','update','new','missing','removed'] },
+                { label: 'UI / Design',         icon: '🎨', color: 'text-pink-400',    bar: 'bg-pink-500',    keywords: ['ui','design','button','screen','dark mode','interface','look','layout','ugly','beautiful'] },
+              ];
+              const categoryCounts = categoryRules.map(cat => {
+                let count = 0;
+                clusters.forEach(c => {
+                  if (cat.keywords.some(kw => (c.title || '').toLowerCase().includes(kw)))
+                    count += (c.review_count || 0);
+                });
+                return { ...cat, count };
+              }).filter(c => c.count > 0).sort((a, b) => b.count - a.count);
 
-            {recent_activity.length > 0 ? (
-              <div className="space-y-3">
-                {recent_activity.map((activity, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10"
-                  >
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-white truncate">
-                        {activity.filename}
-                      </p>
-                      <p className="text-xs text-neutral-500">
-                        {new Date(activity.date).toLocaleDateString()}
-                      </p>
+              const maxCat = categoryCounts[0]?.count || 1;
+
+              return (
+                <div>
+                  <div className="flex items-center gap-3 mb-5">
+                    <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-purple-500/20 to-pink-500/20 border border-purple-500/20 flex items-center justify-center">
+                      <PieChart className="w-4 h-4 text-purple-400" />
                     </div>
-                    <div className="flex items-center gap-4 text-sm">
-                      <div className="text-right">
-                        <p className="text-neutral-400">{activity.reviews}</p>
-                        <p className="text-xs text-neutral-600">reviews</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-orange-400 font-bold">{activity.clusters}</p>
-                        <p className="text-xs text-neutral-600">clusters</p>
-                      </div>
+                    <div>
+                      <h3 className="font-bold text-white">Issue Categories</h3>
+                      <p className="text-xs text-neutral-500">What type of problems dominate</p>
                     </div>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-neutral-500 text-center py-8">No recent activity</p>
-            )}
+
+                  {categoryCounts.length > 0 ? (
+                    <div className="space-y-4">
+                      {categoryCounts.slice(0, 5).map((cat, i) => (
+                        <motion.div
+                          key={cat.label}
+                          initial={{ opacity: 0, x: 10 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 0.45 + i * 0.07 }}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-base leading-none">{cat.icon}</span>
+                              <span className={`text-sm font-bold ${cat.color}`}>{cat.label}</span>
+                            </div>
+                            <span className="text-xs text-neutral-500">{cat.count.toLocaleString()} reviews</span>
+                          </div>
+                          <div className="h-2.5 rounded-full bg-white/5">
+                            <motion.div
+                              className={`h-full rounded-full ${cat.bar}`}
+                              initial={{ width: 0 }}
+                              animate={{ width: `${(cat.count / maxCat) * 100}%` }}
+                              transition={{ delay: 0.5 + i * 0.08, duration: 0.75 }}
+                            />
+                          </div>
+                        </motion.div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-neutral-500 text-center py-10 text-sm">No categories matched</p>
+                  )}
+                </div>
+              );
+            })()}
           </SpotlightCard>
         </motion.div>
       </div>
 
-      {/* Detailed Clusters Section */}
+      {/* Cluster List */}
       {analytics.clusters && analytics.clusters.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.5 }}
+          transition={{ delay: 0.45, duration: 0.5 }}
         >
-          <SpotlightCard className="p-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500/20 to-pink-500/20 border border-purple-500/20 flex items-center justify-center">
-                <FileText className="w-5 h-5 text-purple-400" />
+          <SpotlightCard className="p-8">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 border border-purple-500/20 flex items-center justify-center">
+                <Layers className="w-6 h-6 text-purple-400" />
               </div>
               <div>
-                <h3 className="font-bold text-white">Issue Clusters Breakdown</h3>
-                <p className="text-sm text-neutral-500">
+                <h3 className="text-xl font-bold text-white">Issue Clusters Breakdown</h3>
+                <p className="text-sm text-neutral-400">
                   {analytics.clusters.length} clusters identified
                   {uploadId && " from this upload"}
                 </p>
               </div>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-6">
               {/* Critical Issues */}
               {analytics.clusters.filter(c => c.severity === 'critical').length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                <motion.div
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.6, duration: 0.4 }}
+                >
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-3 h-3 rounded-full bg-red-500 shadow-lg shadow-red-500/50"></div>
                     <h4 className="text-sm font-bold text-red-400 uppercase tracking-wider">
                       Critical ({analytics.clusters.filter(c => c.severity === 'critical').length})
                     </h4>
                   </div>
-                  <div className="space-y-2 pl-5">
+                  <div className="space-y-3 pl-5">
                     {analytics.clusters
                       .filter(c => c.severity === 'critical')
-                      .map((cluster) => {
+                      .map((cluster, index) => {
                         const isExpanded = expandedClusters.has(cluster.id);
                         const details = clusterDetails.get(cluster.id);
                         
                         return (
-                          <div key={cluster.id} className="rounded-lg bg-red-500/10 border border-red-500/20 overflow-hidden">
-                            <button
+                          <motion.div 
+                            key={cluster.id} 
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.7 + index * 0.05, duration: 0.3 }}
+                            className="rounded-xl bg-red-500/10 border border-red-500/20 overflow-hidden"
+                          >
+                            <motion.button
                               onClick={() => toggleCluster(cluster.id)}
-                              className="w-full p-3 hover:bg-red-500/5 transition-colors text-left"
+                              whileHover={{ backgroundColor: "rgba(239, 68, 68, 0.08)" }}
+                              className="w-full p-4 transition-colors text-left"
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div className="flex-1">
@@ -811,7 +847,7 @@ export default function AnalyticsPage() {
                                   )}
                                 </div>
                               </div>
-                            </button>
+                            </motion.button>
                             
                             <AnimatePresence>
                               {isExpanded && details?.sample_reviews && (
@@ -819,7 +855,7 @@ export default function AnalyticsPage() {
                                   initial={{ height: 0, opacity: 0 }}
                                   animate={{ height: "auto", opacity: 1 }}
                                   exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.3 }}
+                                  transition={{ duration: 0.25, ease: "easeInOut" }}
                                   className="border-t border-red-500/20"
                                 >
                                   <div className="p-4 space-y-3 bg-black/20">
@@ -859,34 +895,45 @@ export default function AnalyticsPage() {
                                 </motion.div>
                               )}
                             </AnimatePresence>
-                          </div>
+                          </motion.div>
                         );
                       })}
                   </div>
-                </div>
+                </motion.div>
               )}
 
               {/* High Priority Issues */}
               {analytics.clusters.filter(c => c.severity === 'high').length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+                <motion.div
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.65, duration: 0.4 }}
+                >
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-3 h-3 rounded-full bg-orange-500 shadow-lg shadow-orange-500/50"></div>
                     <h4 className="text-sm font-bold text-orange-400 uppercase tracking-wider">
                       High ({analytics.clusters.filter(c => c.severity === 'high').length})
                     </h4>
                   </div>
-                  <div className="space-y-2 pl-5">
+                  <div className="space-y-3 pl-5">
                     {analytics.clusters
                       .filter(c => c.severity === 'high')
-                      .map((cluster) => {
+                      .map((cluster, index) => {
                         const isExpanded = expandedClusters.has(cluster.id);
                         const details = clusterDetails.get(cluster.id);
                         
                         return (
-                          <div key={cluster.id} className="rounded-lg bg-orange-500/10 border border-orange-500/20 overflow-hidden">
-                            <button
+                          <motion.div 
+                            key={cluster.id} 
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.75 + index * 0.05, duration: 0.3 }}
+                            className="rounded-xl bg-orange-500/10 border border-orange-500/20 overflow-hidden"
+                          >
+                            <motion.button
+                              whileHover={{ backgroundColor: "rgba(249, 115, 22, 0.08)" }}
                               onClick={() => toggleCluster(cluster.id)}
-                              className="w-full p-3 hover:bg-orange-500/5 transition-colors text-left"
+                              className="w-full p-4 transition-colors text-left"
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div className="flex-1">
@@ -903,7 +950,7 @@ export default function AnalyticsPage() {
                                   )}
                                 </div>
                               </div>
-                            </button>
+                            </motion.button>
                             
                             <AnimatePresence>
                               {isExpanded && details?.sample_reviews && (
@@ -911,7 +958,7 @@ export default function AnalyticsPage() {
                                   initial={{ height: 0, opacity: 0 }}
                                   animate={{ height: "auto", opacity: 1 }}
                                   exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.3 }}
+                                  transition={{ duration: 0.25, ease: "easeInOut" }}
                                   className="border-t border-orange-500/20"
                                 >
                                   <div className="p-4 space-y-3 bg-black/20">
@@ -951,34 +998,45 @@ export default function AnalyticsPage() {
                                 </motion.div>
                               )}
                             </AnimatePresence>
-                          </div>
+                          </motion.div>
                         );
                       })}
                   </div>
-                </div>
+                </motion.div>
               )}
 
               {/* Medium Priority Issues */}
               {analytics.clusters.filter(c => c.severity === 'medium').length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                <motion.div
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.7, duration: 0.4 }}
+                >
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-3 h-3 rounded-full bg-yellow-500 shadow-lg shadow-yellow-500/50"></div>
                     <h4 className="text-sm font-bold text-yellow-400 uppercase tracking-wider">
                       Medium ({analytics.clusters.filter(c => c.severity === 'medium').length})
                     </h4>
                   </div>
-                  <div className="space-y-2 pl-5">
+                  <div className="space-y-3 pl-5">
                     {analytics.clusters
                       .filter(c => c.severity === 'medium')
-                      .map((cluster) => {
+                      .map((cluster, index) => {
                         const isExpanded = expandedClusters.has(cluster.id);
                         const details = clusterDetails.get(cluster.id);
                         
                         return (
-                          <div key={cluster.id} className="rounded-lg bg-yellow-500/10 border border-yellow-500/20 overflow-hidden">
-                            <button
+                          <motion.div 
+                            key={cluster.id}
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.8 + index * 0.05, duration: 0.3 }}
+                            className="rounded-xl bg-yellow-500/10 border border-yellow-500/20 overflow-hidden"
+                          >
+                            <motion.button
+                              whileHover={{ backgroundColor: "rgba(234, 179, 8, 0.08)" }}
                               onClick={() => toggleCluster(cluster.id)}
-                              className="w-full p-3 hover:bg-yellow-500/5 transition-colors text-left"
+                              className="w-full p-4 transition-colors text-left"
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div className="flex-1">
@@ -995,7 +1053,7 @@ export default function AnalyticsPage() {
                                   )}
                                 </div>
                               </div>
-                            </button>
+                            </motion.button>
                             
                             <AnimatePresence>
                               {isExpanded && details?.sample_reviews && (
@@ -1003,7 +1061,7 @@ export default function AnalyticsPage() {
                                   initial={{ height: 0, opacity: 0 }}
                                   animate={{ height: "auto", opacity: 1 }}
                                   exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.3 }}
+                                  transition={{ duration: 0.25, ease: "easeInOut" }}
                                   className="border-t border-yellow-500/20"
                                 >
                                   <div className="p-4 space-y-3 bg-black/20">
@@ -1043,34 +1101,45 @@ export default function AnalyticsPage() {
                                 </motion.div>
                               )}
                             </AnimatePresence>
-                          </div>
+                          </motion.div>
                         );
                       })}
                   </div>
-                </div>
+                </motion.div>
               )}
 
               {/* Low Priority Issues */}
               {analytics.clusters.filter(c => c.severity === 'low').length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+                <motion.div
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 0.75, duration: 0.4 }}
+                >
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-3 h-3 rounded-full bg-blue-500 shadow-lg shadow-blue-500/50"></div>
                     <h4 className="text-sm font-bold text-blue-400 uppercase tracking-wider">
                       Low ({analytics.clusters.filter(c => c.severity === 'low').length})
                     </h4>
                   </div>
-                  <div className="space-y-2 pl-5">
+                  <div className="space-y-3 pl-5">
                     {analytics.clusters
                       .filter(c => c.severity === 'low')
-                      .map((cluster) => {
+                      .map((cluster, index) => {
                         const isExpanded = expandedClusters.has(cluster.id);
                         const details = clusterDetails.get(cluster.id);
                         
                         return (
-                          <div key={cluster.id} className="rounded-lg bg-blue-500/10 border border-blue-500/20 overflow-hidden">
-                            <button
+                          <motion.div 
+                            key={cluster.id}
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: 0.85 + index * 0.05, duration: 0.3 }}
+                            className="rounded-xl bg-blue-500/10 border border-blue-500/20 overflow-hidden"
+                          >
+                            <motion.button
+                              whileHover={{ backgroundColor: "rgba(59, 130, 246, 0.08)" }}
                               onClick={() => toggleCluster(cluster.id)}
-                              className="w-full p-3 hover:bg-blue-500/5 transition-colors text-left"
+                              className="w-full p-4 transition-colors text-left"
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div className="flex-1">
@@ -1087,7 +1156,7 @@ export default function AnalyticsPage() {
                                   )}
                                 </div>
                               </div>
-                            </button>
+                            </motion.button>
                             
                             <AnimatePresence>
                               {isExpanded && details?.sample_reviews && (
@@ -1095,7 +1164,7 @@ export default function AnalyticsPage() {
                                   initial={{ height: 0, opacity: 0 }}
                                   animate={{ height: "auto", opacity: 1 }}
                                   exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.3 }}
+                                  transition={{ duration: 0.25, ease: "easeInOut" }}
                                   className="border-t border-blue-500/20"
                                 >
                                   <div className="p-4 space-y-3 bg-black/20">
@@ -1135,11 +1204,11 @@ export default function AnalyticsPage() {
                                 </motion.div>
                               )}
                             </AnimatePresence>
-                          </div>
+                          </motion.div>
                         );
                       })}
                   </div>
-                </div>
+                </motion.div>
               )}
             </div>
           </SpotlightCard>
