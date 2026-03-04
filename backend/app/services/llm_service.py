@@ -8,7 +8,7 @@ import httpx
 import logging
 import time
 import asyncio
-from typing import Optional, Dict, List, Tuple
+from typing import Optional
 from datetime import datetime, timedelta
 from enum import Enum
 from collections import deque
@@ -182,82 +182,6 @@ class LLMService:
         logger.error("❌ All A4F and Groq models failed")
         return "AI explanation temporarily unavailable. Please try again in a moment."
 
-    async def generate_rca(
-        self, 
-        reviews: List[Dict[str, str]], 
-        severity: str,
-        metadata: Dict
-    ) -> Optional[Dict[str, str]]:
-        """
-        Generate Root Cause Analysis for a cluster of reviews.
-        
-        Args:
-            reviews: List of review dicts with 'content', 'rating', 'date'
-            severity: Severity level (CRITICAL, HIGH, MEDIUM, LOW)
-            metadata: Extracted metadata (versions, devices, etc.)
-        
-        Returns:
-            Dict with rca_title, rca_hypothesis, rca_steps, rca_fix
-            None if all models fail
-        """
-        prompt = self._build_rca_prompt(reviews, severity, metadata)
-        
-        for model in self.models:
-            model_name = model.value
-            
-            # Skip if circuit breaker is open
-            if self.circuit_breaker.is_blocked(model_name):
-                logger.info(f"Skipping {model_name} (circuit breaker open)")
-                continue
-            
-            # Wait for rate limit before making request
-            await self._wait_for_rate_limit()
-            
-            try:
-                logger.info(f"Attempting RCA with {model_name}")
-                response = await self._call_api(model_name, prompt)
-                
-                if response:
-                    self.circuit_breaker.record_success(model_name)
-                    parsed = self._parse_rca_response(response)
-                    logger.info(f"✅ RCA generated successfully with {model_name}")
-                    return parsed
-                
-            except httpx.TimeoutException:
-                logger.warning(f"Timeout with {model_name}, trying next model")
-                self.circuit_breaker.record_failure(model_name)
-                
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:
-                    logger.warning(f"Rate limit hit on {model_name}")
-                elif e.response.status_code >= 500:
-                    logger.warning(f"Server error on {model_name}: {e.response.status_code}")
-                else:
-                    logger.error(f"HTTP error on {model_name}: {e.response.status_code}")
-                self.circuit_breaker.record_failure(model_name)
-                
-            except Exception as e:
-                logger.error(f"Unexpected error with {model_name}: {str(e)}")
-                self.circuit_breaker.record_failure(model_name)
-        
-        # --- Tier 2: Groq fallback ---
-        logger.warning("⚠️ All A4F models failed for RCA — switching to Groq fallback")
-        for groq_model in self.groq_models:
-            if self.groq_circuit_breaker.is_blocked(groq_model):
-                continue
-            try:
-                response = await self._call_groq_api(groq_model, prompt)
-                if response:
-                    self.groq_circuit_breaker.record_success(groq_model)
-                    logger.info(f"✅ Groq RCA fallback succeeded with {groq_model}")
-                    return self._parse_rca_response(response)
-            except Exception as e:
-                logger.warning(f"generate_rca() Groq fallback failed on {groq_model}: {e}")
-                self.groq_circuit_breaker.record_failure(groq_model)
-
-        logger.error("❌ All A4F and Groq models failed - returning graceful fallback")
-        return self._graceful_fallback(reviews, severity)
-    
     async def _call_groq_api(self, model: str, prompt: str, max_tokens: int = 600) -> Optional[str]:
         """Call Groq API (OpenAI-compatible). Single attempt, no retry — fail fast for fallback speed."""
         async with httpx.AsyncClient() as client:
@@ -342,102 +266,6 @@ class LLMService:
         
         return None
     
-    def _build_rca_prompt(self, reviews: List[Dict], severity: str, metadata: Dict) -> str:
-        """Build optimized prompt for RCA generation."""
-        review_summary = "\n".join([
-            f"- [{r.get('rating', 'N/A')}★] {r.get('content', '')[:200]}"
-            for r in reviews[:10]  # Limit to 10 most relevant
-        ])
-        
-        versions = metadata.get("versions", [])
-        devices = metadata.get("devices", [])
-        
-        prompt = f"""Analyze these {len(reviews)} app reviews (Severity: {severity}) and generate a Root Cause Analysis.
-
-REVIEWS:
-{review_summary}
-
-METADATA:
-- Versions affected: {', '.join(versions) if versions else 'Unknown'}
-- Devices affected: {', '.join(devices) if devices else 'Unknown'}
-
-Generate a structured RCA in this EXACT format:
-
-TITLE: [One-line technical summary, max 10 words]
-HYPOTHESIS: [Root cause analysis with technical details, 2-3 sentences]
-STEPS: [Numbered debugging/investigation steps]
-FIX: [Concrete fix suggestion with code/config changes]
-
-Keep it technical, actionable, and concise."""
-        
-        return prompt
-    
-    def _parse_rca_response(self, response: str) -> Dict[str, str]:
-        """Parse LLM response into structured RCA fields."""
-        lines = response.strip().split("\n")
-        rca = {
-            "rca_title": "",
-            "rca_hypothesis": "",
-            "rca_steps": "",
-            "rca_fix": ""
-        }
-        
-        current_field = None
-        buffer = []
-        
-        for line in lines:
-            line = line.strip()
-            
-            if line.startswith("TITLE:"):
-                current_field = "rca_title"
-                buffer = [line.replace("TITLE:", "").strip()]
-            elif line.startswith("HYPOTHESIS:"):
-                if current_field and buffer:
-                    rca[current_field] = " ".join(buffer).strip()
-                current_field = "rca_hypothesis"
-                buffer = [line.replace("HYPOTHESIS:", "").strip()]
-            elif line.startswith("STEPS:"):
-                if current_field and buffer:
-                    rca[current_field] = " ".join(buffer).strip()
-                current_field = "rca_steps"
-                buffer = [line.replace("STEPS:", "").strip()]
-            elif line.startswith("FIX:"):
-                if current_field and buffer:
-                    rca[current_field] = " ".join(buffer).strip()
-                current_field = "rca_fix"
-                buffer = [line.replace("FIX:", "").strip()]
-            elif line and current_field:
-                buffer.append(line)
-        
-        # Don't forget the last field
-        if current_field and buffer:
-            rca[current_field] = " ".join(buffer).strip()
-        
-        # Fallback if parsing fails
-        if not rca["rca_title"]:
-            rca["rca_title"] = "Analysis Failed - See Raw Response"
-            rca["rca_hypothesis"] = response[:500]
-        
-        return rca
-    
-    def _graceful_fallback(self, reviews: List[Dict], severity: str) -> Dict[str, str]:
-        """Provide basic RCA when all LLMs fail."""
-        common_words = {}
-        for review in reviews:
-            content = review.get("content", "").lower()
-            for word in ["crash", "bug", "freeze", "slow", "error", "login", "payment"]:
-                if word in content:
-                    common_words[word] = common_words.get(word, 0) + 1
-        
-        top_issue = max(common_words.items(), key=lambda x: x[1])[0] if common_words else "issues"
-        
-        return {
-            "rca_title": f"Multiple {top_issue.title()} Reports (LLM Unavailable)",
-            "rca_hypothesis": f"Pattern detected: {len(reviews)} users reporting {top_issue}-related problems. Manual analysis required as AI services are temporarily unavailable.",
-            "rca_steps": "1. Check error logs for patterns\n2. Reproduce issue manually\n3. Review recent code changes",
-            "rca_fix": f"Investigate {top_issue}-related code paths and recent deployments. Check monitoring dashboards for anomalies."
-        }
-
 
 # Global instance (initialized lazily)
 _llm_service: Optional[LLMService] = None

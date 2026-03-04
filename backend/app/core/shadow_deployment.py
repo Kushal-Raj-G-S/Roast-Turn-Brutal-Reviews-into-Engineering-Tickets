@@ -149,6 +149,14 @@ async def trigger_shadow_deployment(upload_id: int, csv_path: str):
                     session.commit()
                     logger.info(f"✅ Updated upload {upload_id} status to completed")
 
+                    # 🗑️ Delete the uploaded CSV — raw data is no longer needed
+                    # after clusters have been written to the database.
+                    try:
+                        Path(csv_path).unlink(missing_ok=True)
+                        logger.info(f"🗑️ Deleted CSV for upload {upload_id}: {csv_path}")
+                    except Exception as del_err:
+                        logger.warning(f"Could not delete CSV {csv_path}: {del_err}")
+
                     # 🧠 Run pre-generation of 4 severity-category AI explanations.
                     # This runs directly (not as a detached task) because schedule_shadow_deployment
                     # already executes in a background thread with its own event loop — the loop

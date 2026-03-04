@@ -11,7 +11,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, Depends, BackgroundTasks
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 
 from app.models.bulk_models import Upload, Cluster
 from app.core.config import config
@@ -192,22 +192,20 @@ async def bulk_upload(
 @router.get("/uploads/{upload_id}/progress", response_model=UploadStatusResponse)
 async def get_upload_status(
     upload_id: int,
-    session: Session = Depends(get_db_session)
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user)
 ):
     """
     Get status of an upload.
-    
-    Args:
-        upload_id: Upload ID
-        session: Database session
-    
-    Returns:
-        UploadStatusResponse with upload details
+
+    Returns only uploads belonging to the authenticated user.
     """
     upload = session.get(Upload, upload_id)
-    
+
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
+    if str(upload.user_id) != str(user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to view this upload")
     
     return UploadStatusResponse(
         upload_id=upload.id,
@@ -230,26 +228,21 @@ async def get_upload_status(
 async def list_uploads(
     limit: int = 10,
     offset: int = 0,
-    session: Session = Depends(get_db_session)
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user)
 ):
     """
-    List all uploads with pagination.
-    
-    Args:
-        limit: Max number of results
-        offset: Number of results to skip
-        session: Database session
-    
-    Returns:
-        UploadListResponse with list of uploads
+    List uploads for the authenticated user with pagination.
     """
-    # Get total count
-    total_statement = select(Upload)
-    total = len(session.exec(total_statement).all())
-    
-    # Get paginated results
+    # Efficient count — no full table scan
+    total = session.exec(
+        select(func.count(Upload.id)).where(Upload.user_id == user.id)
+    ).one()
+
+    # Get paginated results for this user only
     statement = (
         select(Upload)
+        .where(Upload.user_id == user.id)
         .order_by(Upload.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -282,22 +275,20 @@ async def list_uploads(
 @router.get("/uploads/{upload_id}/clusters", response_model=list[ClusterResponse])
 async def get_upload_clusters(
     upload_id: int,
-    session: Session = Depends(get_db_session)
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user)
 ):
     """
     Get all clusters for an upload.
-    
-    Args:
-        upload_id: Upload ID
-        session: Database session
-    
-    Returns:
-        List of ClusterResponse
+
+    Returns clusters only if the upload belongs to the authenticated user.
     """
-    # Verify upload exists
+    # Verify upload exists and is owned by user
     upload = session.get(Upload, upload_id)
     if not upload:
         raise HTTPException(status_code=404, detail="Upload not found")
+    if str(upload.user_id) != str(user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to view this upload")
     
     # Get clusters
     statement = (
@@ -398,7 +389,7 @@ async def explain_cluster(
     Generate an AI explanation for a cluster by reading its sample reviews.
     Hard cap: reads at most 25 reviews regardless of cluster size.
     """
-    from app.services.llm_service import LLMService
+    from app.services.llm_service import get_llm_service
 
     cluster = session.get(Cluster, cluster_id)
     if not cluster:
@@ -419,39 +410,37 @@ async def explain_cluster(
 
     # Build numbered review list for the prompt
     review_lines = "\n".join(
-        f'{i+1}. ({r.get("rating", "?")}\u2605) "{r.get("content", "").strip()}"'
+        f'{i+1}. Rating {r.get("rating", "?")}★  |  version {r.get("version", "?")}  |  device {r.get("device", "?")}\n   "{r.get("content", "").strip()}"'
         for i, r in enumerate(capped)
     )
 
-    prompt = f"""You are analyzing user reviews that have been grouped into a cluster titled:
-\"{cluster.title}\" (severity: {cluster.severity.upper()}, ~{cluster.review_count} affected users)
+    prompt = f"""You are a senior mobile-platform engineer performing a quick triage for a cluster of user reports.
 
-Here are {len(capped)} representative reviews from this cluster:
+CLUSTER: "{cluster.title}"
+SEVERITY: {cluster.severity.upper()}
+AFFECTED USERS: ~{cluster.review_count}
+EVIDENCE ({len(capped)} of {cluster.review_count} reviews):
 
 {review_lines}
 
-Your job: Write a sharp, honest explanation of what is happening in these reviews.
-Structure your response EXACTLY as:
+Write a tight engineering triage note structured EXACTLY as below. Every section is mandatory.
 
-**What users are experiencing**
-2-3 sentences describing the core pain point as users actually feel it — use their language, not corporate speak.
+**Root Cause Hypothesis**
+1-2 sentences on the most likely technical root cause inferred from the reviews. Be specific — name the subsystem, API, or flow if reviewable.
 
-**Why these reviews are grouped together**
-1-2 sentences on the common thread connecting all {len(capped)} reviews above. Don't say "users mention X" — say *what* specifically about X links them.
+**Affected Surface**
+One line each: Client layer · Server/API layer · Data layer
+Write "Likely unaffected" if not implicated. Do NOT leave any line blank.
 
-**Impact on users**
-1-2 sentences on the real-world consequence for the user (lost data, app unusable, money lost, etc.)
+**Reproduction Signal**
+The clearest pattern (version, device, action sequence) that an engineer could use to reproduce.
 
-**What needs attention**
-1 clear actionable sentence for the development team.
+**Recommended First Action**
+The single most impactful next step for the on-call engineer (log query, feature flag, rollback, hotfix, etc.).
 
-Rules:
-- Every sentence must be directly supported by at least one of the {len(capped)} reviews listed above
-- Do NOT invent problems not present in the reviews
-- Do NOT pad with filler. Be precise and direct
-- If the cluster is mislabeled (e.g., reviews are actually positive), say so clearly"""
+Rules: Every sentence must be traceable to at least one review above. Do not invent details not present in the data. If the cluster appears mislabelled (e.g. reviews are positive), state "Cluster may be mislabelled — reviews appear positive." and stop."""
 
-    llm = LLMService()
+    llm = get_llm_service()
     explanation = await llm.generate(prompt, max_tokens=500)
 
     return ClusterExplainResponse(

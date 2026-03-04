@@ -1,6 +1,16 @@
 """
 Background worker for processing bulk jobs.
 Polls for PENDING jobs and processes them using BulkProcessor.
+
+NOTE (architecture): All uploads created via POST /upload are assigned
+status='shadow_processing' and are handled entirely by the shadow deployment
+orchestrator (shadow_deployment.py). This worker therefore never finds any
+jobs to process in the current architecture.
+
+The worker is kept alive as a safety net for any future uploads that may
+be created with status='pending' (e.g. direct DB inserts, admin tools, or
+if the shadow orchestrator is disabled). It does NOT consume resources when
+idle — it simply wakes, queries, finds nothing, and sleeps.
 """
 
 import asyncio
