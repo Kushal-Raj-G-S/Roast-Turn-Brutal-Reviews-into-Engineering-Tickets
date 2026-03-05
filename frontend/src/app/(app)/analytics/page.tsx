@@ -215,7 +215,7 @@ export default function AnalyticsPage() {
       } else {
         // Fetch overall analytics
         apiClient.setToken(session.access_token);
-        const data = await apiClient.getAnalytics();
+        const data = await apiClient.getAnalytics() as AnalyticsData;
         
         // Also fetch all user's clusters
         const { data: userUploads } = await supabase

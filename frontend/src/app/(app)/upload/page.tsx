@@ -34,6 +34,10 @@ interface ProgressData {
   total: number;
   current: number;
   message: string;
+  total_reviews?: number;
+  filtered_noise?: number;
+  clusters_created?: number;
+  error_message?: string;
 }
 
 export default function UploadPage() {
