@@ -8,12 +8,102 @@ on every upload, providing real-time architecture validation.
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
-from app.models.bulk_models import Upload
-from sqlmodel import Session
+from app.models.bulk_models import Upload, Cluster
+from sqlmodel import Session, select
 
 logger = logging.getLogger(__name__)
+
+# ── regression detection ──────────────────────────────────────────────────────
+
+def _title_similarity(a: str, b: str) -> float:
+    """
+    Token-level Jaccard similarity between two cluster titles.
+    Ignores common stop-words for better signal.
+    """
+    _STOP = {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "is", "are", "was", "were", "not", "issue", "issues",
+        "problem", "problems", "error", "errors", "app", "users", "user",
+        "when", "after", "during", "while",
+    }
+    wa = set(a.lower().split()) - _STOP
+    wb = set(b.lower().split()) - _STOP
+    if not wa or not wb:
+        return 0.0
+    intersection = len(wa & wb)
+    union = len(wa | wb)
+    return intersection / union if union > 0 else 0.0
+
+
+def _detect_regressions(
+    session: Session,
+    new_cluster_ids: List[int],
+    upload_id: int,
+    user_id,
+) -> None:
+    """
+    Compare newly-created clusters against all resolved clusters from this user's
+    PREVIOUS uploads. If title similarity ≥ 0.40, mark the new cluster as a
+    regression of the resolved one.
+
+    Runs synchronously inside the background thread (no await needed).
+    """
+    # 1. Resolved clusters from user's previous uploads (exclude current upload)
+    prev_upload_ids: List[int] = list(
+        session.exec(
+            select(Upload.id)
+            .where(Upload.user_id == user_id)
+            .where(Upload.status == "completed")
+            .where(Upload.id != upload_id)
+        ).all()
+    )
+    if not prev_upload_ids:
+        return
+
+    resolved_clusters = list(
+        session.exec(
+            select(Cluster)
+            .where(Cluster.upload_id.in_(prev_upload_ids))
+            .where(Cluster.status == "resolved")
+        ).all()
+    )
+    if not resolved_clusters:
+        return
+
+    # 2. New clusters for this upload
+    new_clusters = list(
+        session.exec(
+            select(Cluster).where(Cluster.id.in_(new_cluster_ids))
+        ).all()
+    )
+
+    regression_count = 0
+    for nc in new_clusters:
+        best_score = 0.0
+        best_match: Optional[Cluster] = None
+        for rc in resolved_clusters:
+            score = _title_similarity(nc.title, rc.title)
+            if score > best_score:
+                best_score = score
+                best_match = rc
+        if best_match and best_score >= 0.40:
+            nc.regression_detected = True
+            nc.regression_of_title = best_match.title
+            session.add(nc)
+            regression_count += 1
+            logger.warning(
+                f"↩ REGRESSION detected: cluster {nc.id} '{nc.title}' "
+                f"matches resolved '{best_match.title}' (score={best_score:.2f})"
+            )
+
+    if regression_count:
+        session.commit()
+        logger.info(f"Regression check: {regression_count} regression(s) flagged for upload {upload_id}")
+    else:
+        logger.info(f"Regression check: no regressions found for upload {upload_id}")
+
 
 # Global orchestrator instance (lazy initialization)
 _orchestrator: Optional['RealShadowOrchestrator'] = None
@@ -148,6 +238,18 @@ async def trigger_shadow_deployment(upload_id: int, csv_path: str):
                     
                     session.commit()
                     logger.info(f"✅ Updated upload {upload_id} status to completed")
+
+                    # ↩ Fix Verification Loop — detect regressions vs resolved history
+                    try:
+                        new_cluster_ids = [
+                            c.id for c in session.exec(
+                                select(Cluster).where(Cluster.upload_id == upload_id)
+                            ).all()
+                            if c.id is not None
+                        ]
+                        _detect_regressions(session, new_cluster_ids, upload_id, upload.user_id)
+                    except Exception as reg_err:
+                        logger.warning(f"Regression detection failed (non-fatal): {reg_err}")
 
                     # 🗑️ Delete the uploaded CSV — raw data is no longer needed
                     # after clusters have been written to the database.

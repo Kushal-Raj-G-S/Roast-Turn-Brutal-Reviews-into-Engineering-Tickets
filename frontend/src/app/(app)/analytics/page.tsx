@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 /**
  * Analytics Page - Review Analytics Dashboard
@@ -23,13 +23,18 @@ import {
   Star,
   Layers,
   Sparkles,
-  ArrowRight
+  ArrowRight,
+  Ticket,
+  Zap,
+  RotateCcw,
+  Loader2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
 import { supabase } from "@/lib/supabase/client";
 import { SpotlightCard } from "@/components/ui";
+import { TicketExportModal } from "@/components/ui/TicketExportModal";
 import type { ClusterDetail } from "@/lib/api-client";
 
 type AnalyticsData = {
@@ -73,6 +78,8 @@ type AnalyticsData = {
     review_count: number;
     status: string;
     created_at: string;
+    regression_detected?: boolean;
+    regression_of_title?: string;
   }>;
   upload_data?: {
     filename: string;
@@ -90,6 +97,45 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [expandedClusters, setExpandedClusters] = useState<Set<number>>(new Set());
   const [clusterDetails, setClusterDetails] = useState<Map<number, ClusterDetail>>(new Map());
+  const [exportCluster, setExportCluster] = useState<NonNullable<AnalyticsData['clusters']>[number] | null>(null);
+  const [loadingExportId, setLoadingExportId] = useState<number | null>(null);
+
+  // â”€â”€ Velocity Spike Detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Within an upload, a cluster is "SPIKING" when its review count is
+  // at least 1.5 standard deviations above the mean AND â‰¥ 15 reviews.
+  // This surfaces outlier clusters that are growing unusually fast.
+  const spikeIds = useMemo(() => {
+    const clusters = analytics?.clusters ?? [];
+    if (clusters.length < 3) return new Set<number>();
+    const counts = clusters.map(c => c.review_count ?? 0);
+    const mean = counts.reduce((a, b) => a + b, 0) / counts.length;
+    const variance = counts.map(c => (c - mean) ** 2).reduce((a, b) => a + b, 0) / counts.length;
+    const stddev = Math.sqrt(variance);
+    const threshold = Math.max(mean + 1.5 * stddev, 15);
+    return new Set(
+      clusters.filter(c => (c.review_count ?? 0) >= threshold).map(c => c.id)
+    );
+  }, [analytics?.clusters]);
+
+  // â”€â”€ Ticket Export helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const openExport = useCallback(async (cluster: NonNullable<AnalyticsData['clusters']>[number]) => {
+    if (!clusterDetails.has(cluster.id)) {
+      setLoadingExportId(cluster.id);
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          apiClient.setToken(session.access_token);
+          const details = await apiClient.getCluster(cluster.id);
+          setClusterDetails(prev => new Map(prev.set(cluster.id, details)));
+        }
+      } catch (err) {
+        console.error('Failed to fetch cluster details for export:', err);
+      } finally {
+        setLoadingExportId(null);
+      }
+    }
+    setExportCluster(cluster);
+  }, [clusterDetails]);
 
   useEffect(() => {
     fetchAnalytics();
@@ -497,7 +543,7 @@ export default function AnalyticsPage() {
         </motion.div>
       </div>
 
-      {/* ── Row 1: #1 User Complaint — full width ── */}
+      {/* â”€â”€ Row 1: #1 User Complaint â€” full width â”€â”€ */}
       {(() => {
         const clusters = analytics.clusters || [];
         const totalReviews = clusters.reduce((s, c) => s + (c.review_count || 0), 0);
@@ -520,7 +566,7 @@ export default function AnalyticsPage() {
 
         const sorted = [...clusters].sort((a, b) => (b.review_count || 0) - (a.review_count || 0));
         const top = sorted[0];
-        const runners = sorted.slice(1, 5); // exactly 4 runner-ups → clean 4-col row
+        const runners = sorted.slice(1, 5); // exactly 4 runner-ups â†’ clean 4-col row
         const topMeta = severityMeta[top.severity] ?? severityMeta.low;
         const topPct = Math.round(((top.review_count || 0) / totalReviews) * 100);
 
@@ -539,7 +585,7 @@ export default function AnalyticsPage() {
                   </div>
                   <div>
                     <h3 className="font-bold text-white">#1 User Complaint</h3>
-                    <p className="text-xs text-neutral-500">Loudest cluster by review volume · {totalReviews.toLocaleString()} total reviews</p>
+                    <p className="text-xs text-neutral-500">Loudest cluster by review volume Â· {totalReviews.toLocaleString()} total reviews</p>
                   </div>
                 </div>
                 <span className={`text-xs font-black px-2.5 py-1 rounded-full border ${topMeta.color} ${topMeta.textBg} ${topMeta.border}`}>
@@ -547,7 +593,7 @@ export default function AnalyticsPage() {
                 </span>
               </div>
 
-              {/* Top complaint — horizontal split */}
+              {/* Top complaint â€” horizontal split */}
               <motion.div
                 className={`rounded-xl border ${topMeta.border} ${topMeta.bg} mb-5`}
                 initial={{ opacity: 0, y: 8 }}
@@ -570,7 +616,7 @@ export default function AnalyticsPage() {
                       <p className="text-xs text-neutral-500">reviews</p>
                     </div>
                     <div className="text-center">
-                      <p className="text-lg">{statusEmoji[top.status] ?? '❓'}</p>
+                      <p className="text-lg">{statusEmoji[top.status] ?? 'â“'}</p>
                       <p className="text-xs text-neutral-500">{statusLabel[top.status] ?? top.status}</p>
                     </div>
                   </div>
@@ -633,7 +679,7 @@ export default function AnalyticsPage() {
         );
       })()}
 
-      {/* ── Row 2: Severity Distribution + Issue Categories — equal 2-col ── */}
+      {/* â”€â”€ Row 2: Severity Distribution + Issue Categories â€” equal 2-col â”€â”€ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Severity Distribution */}
         <motion.div
@@ -712,7 +758,7 @@ export default function AnalyticsPage() {
                 { label: 'Crashes & Errors',   icon: '💥', color: 'text-red-400',     bar: 'bg-red-500',     keywords: ['crash','crashing','not open','force close','freeze','stuck','black screen','not working','broken'] },
                 { label: 'Performance',         icon: '🐢', color: 'text-orange-400',  bar: 'bg-orange-500',  keywords: ['lag','slow','loading','battery','hang','performance','takes long','drains'] },
                 { label: 'Ads',                 icon: '📢', color: 'text-yellow-400',  bar: 'bg-yellow-500',  keywords: ['ad','ads','advertisement','popup','pop-up','too many ads','annoying ad','banner'] },
-                { label: 'Login / Account',     icon: '🔐', color: 'text-cyan-400',    bar: 'bg-cyan-500',    keywords: ['login','sign in','sign out','account','password','otp','verify','logout','session'] },
+                { label: 'Login / Account',     icon: '🔑', color: 'text-cyan-400',    bar: 'bg-cyan-500',    keywords: ['login','sign in','sign out','account','password','otp','verify','logout','session'] },
                 { label: 'Payments',            icon: '💸', color: 'text-emerald-400', bar: 'bg-emerald-500', keywords: ['pay','paid','purchase','subscription','refund','charge','money','buy','coin','gem','booster','reward'] },
                 { label: 'Gameplay / Features', icon: '🎮', color: 'text-purple-400',  bar: 'bg-purple-500',  keywords: ['level','game','play','lives','score','feature','update','new','missing','removed'] },
                 { label: 'UI / Design',         icon: '🎨', color: 'text-pink-400',    bar: 'bg-pink-500',    keywords: ['ui','design','button','screen','dark mode','interface','look','layout','ugly','beautiful'] },
@@ -777,442 +823,220 @@ export default function AnalyticsPage() {
         </motion.div>
       </div>
 
-      {/* Cluster List */}
-      {analytics.clusters && analytics.clusters.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.45, duration: 0.5 }}
-        >
-          <SpotlightCard className="p-8">
-            <div className="flex items-center gap-3 mb-8">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 border border-purple-500/20 flex items-center justify-center">
-                <Layers className="w-6 h-6 text-purple-400" />
+      {/* â”€â”€ Cluster List: Spike Detection + Fix Regression + Ticket Export â”€â”€ */}
+      {analytics.clusters && analytics.clusters.length > 0 && (() => {
+        // Severity visual config
+        type SevCfg = { color: string; bg: string; border: string; hover: string };
+        const sevCfg: Record<string, SevCfg> = {
+          critical: { color: 'text-red-400',    bg: 'bg-red-500/10',    border: 'border-red-500/20',    hover: 'rgba(239,68,68,0.08)' },
+          high:     { color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20', hover: 'rgba(249,115,22,0.08)' },
+          medium:   { color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20', hover: 'rgba(234,179,8,0.08)' },
+          low:      { color: 'text-blue-400',   bg: 'bg-blue-500/10',   border: 'border-blue-500/20',   hover: 'rgba(59,130,246,0.08)' },
+        };
+
+        // Shared row renderer â€” used for all 4 severity buckets
+        const renderRow = (
+          cluster: NonNullable<AnalyticsData['clusters']>[number],
+          index: number,
+          baseDelay: number
+        ) => {
+          const s = sevCfg[cluster.severity] ?? sevCfg.low;
+          const isExpanded = expandedClusters.has(cluster.id);
+          const details = clusterDetails.get(cluster.id);
+          const isSpiking = spikeIds.has(cluster.id);
+          const isRegression = !!cluster.regression_detected;
+
+          return (
+            <motion.div
+              key={cluster.id}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: baseDelay + index * 0.05, duration: 0.3 }}
+              className={`rounded-xl ${s.bg} border ${s.border} overflow-hidden`}
+            >
+              {/* Row: accordion toggle (flex-1) + export ticket button */}
+              <div className="flex items-stretch">
+                <motion.button
+                  whileHover={{ backgroundColor: s.hover }}
+                  onClick={() => toggleCluster(cluster.id)}
+                  className="flex-1 p-4 transition-colors text-left min-w-0"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      {/* âš¡ Spike  /  â†© Regression badges */}
+                      {(isSpiking || isRegression) && (
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                          {isSpiking && (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 tracking-wide">
+                              <Zap className="w-2.5 h-2.5" />SPIKING
+                            </span>
+                          )}
+                          {isRegression && (
+                            <span
+                              className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 tracking-wide cursor-help"
+                              title={cluster.regression_of_title
+                                ? `Previously resolved: "${cluster.regression_of_title}"`
+                                : 'This issue was previously resolved and has re-appeared'}
+                            >
+                              <RotateCcw className="w-2.5 h-2.5" />REGRESSION
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      <p className="text-sm text-white font-medium leading-snug">{cluster.title}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className={`text-xs ${s.color} font-medium whitespace-nowrap`}>
+                        {cluster.review_count} review{cluster.review_count !== 1 ? 's' : ''}
+                      </span>
+                      {isExpanded
+                        ? <ChevronUp className={`w-4 h-4 ${s.color}`} />
+                        : <ChevronDown className={`w-4 h-4 ${s.color}`} />}
+                    </div>
+                  </div>
+                </motion.button>
+
+                {/* Export to ticket â€” separate from the accordion toggle */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); openExport(cluster); }}
+                  className={`border-l ${s.border} px-3 flex items-center text-neutral-600 hover:text-neutral-300 transition-colors`}
+                  title="Export as GitHub / Linear ticket"
+                >
+                  {loadingExportId === cluster.id
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-400" />
+                    : <Ticket className="w-3.5 h-3.5" />
+                  }
+                </button>
               </div>
-              <div>
-                <h3 className="text-xl font-bold text-white">Issue Clusters Breakdown</h3>
-                <p className="text-sm text-neutral-400">
-                  {analytics.clusters.length} clusters identified
-                  {uploadId && " from this upload"}
-                </p>
+
+              {/* Accordion â€” sample reviews */}
+              <AnimatePresence>
+                {isExpanded && details?.sample_reviews && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25, ease: 'easeInOut' }}
+                    className={`border-t ${s.border}`}
+                  >
+                    <div className="p-4 space-y-3 bg-black/20">
+                      <p className={`text-xs ${s.color} font-semibold uppercase tracking-wider`}>
+                        Sample Reviews ({details.sample_reviews.length})
+                      </p>
+                      {details.sample_reviews.map((review, idx) => (
+                        <div key={idx} className={`p-3 rounded-md ${s.bg} border ${s.border}`}>
+                          <div className="flex items-start gap-2 mb-2">
+                            {review.rating && (
+                              <div className="flex items-center gap-1">
+                                {Array.from({ length: 5 }).map((_, i) => (
+                                  <Star key={i} className={`w-3 h-3 ${i < review.rating! ? 'fill-yellow-500 text-yellow-500' : 'text-neutral-700'}`} />
+                                ))}
+                              </div>
+                            )}
+                            {review.device && <span className="text-xs text-neutral-500">• {review.device}</span>}
+                            {review.version && <span className="text-xs text-neutral-500">• v{review.version}</span>}
+                          </div>
+                          <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-wrap">{review.content}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          );
+        };
+
+        const severities = [
+          { key: 'critical', label: 'Critical', dotCls: 'bg-red-500 shadow-lg shadow-red-500/50',    textCls: 'text-red-400',    delay: 0.6  },
+          { key: 'high',     label: 'High',     dotCls: 'bg-orange-500 shadow-lg shadow-orange-500/50', textCls: 'text-orange-400', delay: 0.65 },
+          { key: 'medium',   label: 'Medium',   dotCls: 'bg-yellow-500 shadow-lg shadow-yellow-500/50', textCls: 'text-yellow-400', delay: 0.7  },
+          { key: 'low',      label: 'Low',      dotCls: 'bg-blue-500 shadow-lg shadow-blue-500/50',   textCls: 'text-blue-400',   delay: 0.75 },
+        ];
+
+        const totalSpiking = spikeIds.size;
+        const totalRegressions = analytics.clusters.filter(c => c.regression_detected).length;
+
+        return (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.45, duration: 0.5 }}
+          >
+            <SpotlightCard className="p-8">
+              {/* Card header */}
+              <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500/20 to-pink-500/20 border border-purple-500/20 flex items-center justify-center">
+                    <Layers className="w-6 h-6 text-purple-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-white">Issue Clusters Breakdown</h3>
+                    <p className="text-sm text-neutral-400">
+                      {analytics.clusters.length} clusters identified
+                      {uploadId && ' from this upload'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Signal summary badges + export hint */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {totalSpiking > 0 && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                      <Zap className="w-3 h-3" />{totalSpiking} SPIKING
+                    </span>
+                  )}
+                  {totalRegressions > 0 && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-full bg-purple-500/15 text-purple-400 border border-purple-500/30">
+                      <RotateCcw className="w-3 h-3" />{totalRegressions} REGRESSION{totalRegressions !== 1 ? 'S' : ''}
+                    </span>
+                  )}
+                  <span className="inline-flex items-center gap-1 text-[11px] text-neutral-600">
+                    <Ticket className="w-3 h-3" />to export
+                  </span>
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-6">
-              {/* Critical Issues */}
-              {analytics.clusters.filter(c => c.severity === 'critical').length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.6, duration: 0.4 }}
-                >
-                  <div className="flex items-center gap-2 mb-4">
-                    <div className="w-3 h-3 rounded-full bg-red-500 shadow-lg shadow-red-500/50"></div>
-                    <h4 className="text-sm font-bold text-red-400 uppercase tracking-wider">
-                      Critical ({analytics.clusters.filter(c => c.severity === 'critical').length})
-                    </h4>
-                  </div>
-                  <div className="space-y-3 pl-5">
-                    {analytics.clusters
-                      .filter(c => c.severity === 'critical')
-                      .map((cluster, index) => {
-                        const isExpanded = expandedClusters.has(cluster.id);
-                        const details = clusterDetails.get(cluster.id);
-                        
-                        return (
-                          <motion.div 
-                            key={cluster.id} 
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.7 + index * 0.05, duration: 0.3 }}
-                            className="rounded-xl bg-red-500/10 border border-red-500/20 overflow-hidden"
-                          >
-                            <motion.button
-                              onClick={() => toggleCluster(cluster.id)}
-                              whileHover={{ backgroundColor: "rgba(239, 68, 68, 0.08)" }}
-                              className="w-full p-4 transition-colors text-left"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex-1">
-                                  <p className="text-sm text-white font-medium">{cluster.title}</p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-red-400 font-medium whitespace-nowrap">
-                                    {cluster.review_count} review{cluster.review_count !== 1 ? 's' : ''}
-                                  </span>
-                                  {isExpanded ? (
-                                    <ChevronUp className="w-4 h-4 text-red-400" />
-                                  ) : (
-                                    <ChevronDown className="w-4 h-4 text-red-400" />
-                                  )}
-                                </div>
-                              </div>
-                            </motion.button>
-                            
-                            <AnimatePresence>
-                              {isExpanded && details?.sample_reviews && (
-                                <motion.div
-                                  initial={{ height: 0, opacity: 0 }}
-                                  animate={{ height: "auto", opacity: 1 }}
-                                  exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.25, ease: "easeInOut" }}
-                                  className="border-t border-red-500/20"
-                                >
-                                  <div className="p-4 space-y-3 bg-black/20">
-                                    <p className="text-xs text-red-400 font-semibold uppercase tracking-wider">
-                                      Sample Reviews ({details.sample_reviews.length})
-                                    </p>
-                                    {details.sample_reviews.map((review, idx) => (
-                                      <div key={idx} className="p-3 rounded-md bg-red-500/5 border border-red-500/10">
-                                        <div className="flex items-start gap-2 mb-2">
-                                          {review.rating && (
-                                            <div className="flex items-center gap-1">
-                                              {Array.from({ length: 5 }).map((_, i) => (
-                                                <Star
-                                                  key={i}
-                                                  className={`w-3 h-3 ${
-                                                    i < review.rating
-                                                      ? 'fill-yellow-500 text-yellow-500'
-                                                      : 'text-neutral-700'
-                                                  }`}
-                                                />
-                                              ))}
-                                            </div>
-                                          )}
-                                          {review.device && (
-                                            <span className="text-xs text-neutral-500">• {review.device}</span>
-                                          )}
-                                          {review.version && (
-                                            <span className="text-xs text-neutral-500">• v{review.version}</span>
-                                          )}
-                                        </div>
-                                        <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-wrap">
-                                          {review.content}
-                                        </p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </motion.div>
-                        );
-                      })}
-                  </div>
-                </motion.div>
-              )}
+              {/* Severity buckets */}
+              <div className="space-y-6">
+                {severities.map(({ key, label, dotCls, textCls, delay }) => {
+                  const bucket = analytics.clusters!.filter(c => c.severity === key);
+                  if (bucket.length === 0) return null;
+                  return (
+                    <motion.div
+                      key={key}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay, duration: 0.4 }}
+                    >
+                      <div className="flex items-center gap-2 mb-4">
+                        <div className={`w-3 h-3 rounded-full ${dotCls}`} />
+                        <h4 className={`text-sm font-bold ${textCls} uppercase tracking-wider`}>
+                          {label} ({bucket.length})
+                        </h4>
+                      </div>
+                      <div className="space-y-3 pl-5">
+                        {bucket.map((cluster, idx) => renderRow(cluster, idx, delay + 0.1))}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </SpotlightCard>
+          </motion.div>
+        );
+      })()}
 
-              {/* High Priority Issues */}
-              {analytics.clusters.filter(c => c.severity === 'high').length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.65, duration: 0.4 }}
-                >
-                  <div className="flex items-center gap-2 mb-4">
-                    <div className="w-3 h-3 rounded-full bg-orange-500 shadow-lg shadow-orange-500/50"></div>
-                    <h4 className="text-sm font-bold text-orange-400 uppercase tracking-wider">
-                      High ({analytics.clusters.filter(c => c.severity === 'high').length})
-                    </h4>
-                  </div>
-                  <div className="space-y-3 pl-5">
-                    {analytics.clusters
-                      .filter(c => c.severity === 'high')
-                      .map((cluster, index) => {
-                        const isExpanded = expandedClusters.has(cluster.id);
-                        const details = clusterDetails.get(cluster.id);
-                        
-                        return (
-                          <motion.div 
-                            key={cluster.id} 
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.75 + index * 0.05, duration: 0.3 }}
-                            className="rounded-xl bg-orange-500/10 border border-orange-500/20 overflow-hidden"
-                          >
-                            <motion.button
-                              whileHover={{ backgroundColor: "rgba(249, 115, 22, 0.08)" }}
-                              onClick={() => toggleCluster(cluster.id)}
-                              className="w-full p-4 transition-colors text-left"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex-1">
-                                  <p className="text-sm text-white font-medium">{cluster.title}</p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-orange-400 font-medium whitespace-nowrap">
-                                    {cluster.review_count} review{cluster.review_count !== 1 ? 's' : ''}
-                                  </span>
-                                  {isExpanded ? (
-                                    <ChevronUp className="w-4 h-4 text-orange-400" />
-                                  ) : (
-                                    <ChevronDown className="w-4 h-4 text-orange-400" />
-                                  )}
-                                </div>
-                              </div>
-                            </motion.button>
-                            
-                            <AnimatePresence>
-                              {isExpanded && details?.sample_reviews && (
-                                <motion.div
-                                  initial={{ height: 0, opacity: 0 }}
-                                  animate={{ height: "auto", opacity: 1 }}
-                                  exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.25, ease: "easeInOut" }}
-                                  className="border-t border-orange-500/20"
-                                >
-                                  <div className="p-4 space-y-3 bg-black/20">
-                                    <p className="text-xs text-orange-400 font-semibold uppercase tracking-wider">
-                                      Sample Reviews ({details.sample_reviews.length})
-                                    </p>
-                                    {details.sample_reviews.map((review, idx) => (
-                                      <div key={idx} className="p-3 rounded-md bg-orange-500/5 border border-orange-500/10">
-                                        <div className="flex items-start gap-2 mb-2">
-                                          {review.rating && (
-                                            <div className="flex items-center gap-1">
-                                              {Array.from({ length: 5 }).map((_, i) => (
-                                                <Star
-                                                  key={i}
-                                                  className={`w-3 h-3 ${
-                                                    i < review.rating
-                                                      ? 'fill-yellow-500 text-yellow-500'
-                                                      : 'text-neutral-700'
-                                                  }`}
-                                                />
-                                              ))}
-                                            </div>
-                                          )}
-                                          {review.device && (
-                                            <span className="text-xs text-neutral-500">• {review.device}</span>
-                                          )}
-                                          {review.version && (
-                                            <span className="text-xs text-neutral-500">• v{review.version}</span>
-                                          )}
-                                        </div>
-                                        <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-wrap">
-                                          {review.content}
-                                        </p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </motion.div>
-                        );
-                      })}
-                  </div>
-                </motion.div>
-              )}
-
-              {/* Medium Priority Issues */}
-              {analytics.clusters.filter(c => c.severity === 'medium').length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.7, duration: 0.4 }}
-                >
-                  <div className="flex items-center gap-2 mb-4">
-                    <div className="w-3 h-3 rounded-full bg-yellow-500 shadow-lg shadow-yellow-500/50"></div>
-                    <h4 className="text-sm font-bold text-yellow-400 uppercase tracking-wider">
-                      Medium ({analytics.clusters.filter(c => c.severity === 'medium').length})
-                    </h4>
-                  </div>
-                  <div className="space-y-3 pl-5">
-                    {analytics.clusters
-                      .filter(c => c.severity === 'medium')
-                      .map((cluster, index) => {
-                        const isExpanded = expandedClusters.has(cluster.id);
-                        const details = clusterDetails.get(cluster.id);
-                        
-                        return (
-                          <motion.div 
-                            key={cluster.id}
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.8 + index * 0.05, duration: 0.3 }}
-                            className="rounded-xl bg-yellow-500/10 border border-yellow-500/20 overflow-hidden"
-                          >
-                            <motion.button
-                              whileHover={{ backgroundColor: "rgba(234, 179, 8, 0.08)" }}
-                              onClick={() => toggleCluster(cluster.id)}
-                              className="w-full p-4 transition-colors text-left"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex-1">
-                                  <p className="text-sm text-white font-medium">{cluster.title}</p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-yellow-400 font-medium whitespace-nowrap">
-                                    {cluster.review_count} review{cluster.review_count !== 1 ? 's' : ''}
-                                  </span>
-                                  {isExpanded ? (
-                                    <ChevronUp className="w-4 h-4 text-yellow-400" />
-                                  ) : (
-                                    <ChevronDown className="w-4 h-4 text-yellow-400" />
-                                  )}
-                                </div>
-                              </div>
-                            </motion.button>
-                            
-                            <AnimatePresence>
-                              {isExpanded && details?.sample_reviews && (
-                                <motion.div
-                                  initial={{ height: 0, opacity: 0 }}
-                                  animate={{ height: "auto", opacity: 1 }}
-                                  exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.25, ease: "easeInOut" }}
-                                  className="border-t border-yellow-500/20"
-                                >
-                                  <div className="p-4 space-y-3 bg-black/20">
-                                    <p className="text-xs text-yellow-400 font-semibold uppercase tracking-wider">
-                                      Sample Reviews ({details.sample_reviews.length})
-                                    </p>
-                                    {details.sample_reviews.map((review, idx) => (
-                                      <div key={idx} className="p-3 rounded-md bg-yellow-500/5 border border-yellow-500/10">
-                                        <div className="flex items-start gap-2 mb-2">
-                                          {review.rating && (
-                                            <div className="flex items-center gap-1">
-                                              {Array.from({ length: 5 }).map((_, i) => (
-                                                <Star
-                                                  key={i}
-                                                  className={`w-3 h-3 ${
-                                                    i < review.rating
-                                                      ? 'fill-yellow-500 text-yellow-500'
-                                                      : 'text-neutral-700'
-                                                  }`}
-                                                />
-                                              ))}
-                                            </div>
-                                          )}
-                                          {review.device && (
-                                            <span className="text-xs text-neutral-500">• {review.device}</span>
-                                          )}
-                                          {review.version && (
-                                            <span className="text-xs text-neutral-500">• v{review.version}</span>
-                                          )}
-                                        </div>
-                                        <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-wrap">
-                                          {review.content}
-                                        </p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </motion.div>
-                        );
-                      })}
-                  </div>
-                </motion.div>
-              )}
-
-              {/* Low Priority Issues */}
-              {analytics.clusters.filter(c => c.severity === 'low').length > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.75, duration: 0.4 }}
-                >
-                  <div className="flex items-center gap-2 mb-4">
-                    <div className="w-3 h-3 rounded-full bg-blue-500 shadow-lg shadow-blue-500/50"></div>
-                    <h4 className="text-sm font-bold text-blue-400 uppercase tracking-wider">
-                      Low ({analytics.clusters.filter(c => c.severity === 'low').length})
-                    </h4>
-                  </div>
-                  <div className="space-y-3 pl-5">
-                    {analytics.clusters
-                      .filter(c => c.severity === 'low')
-                      .map((cluster, index) => {
-                        const isExpanded = expandedClusters.has(cluster.id);
-                        const details = clusterDetails.get(cluster.id);
-                        
-                        return (
-                          <motion.div 
-                            key={cluster.id}
-                            initial={{ opacity: 0, x: -10 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: 0.85 + index * 0.05, duration: 0.3 }}
-                            className="rounded-xl bg-blue-500/10 border border-blue-500/20 overflow-hidden"
-                          >
-                            <motion.button
-                              whileHover={{ backgroundColor: "rgba(59, 130, 246, 0.08)" }}
-                              onClick={() => toggleCluster(cluster.id)}
-                              className="w-full p-4 transition-colors text-left"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="flex-1">
-                                  <p className="text-sm text-white font-medium">{cluster.title}</p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-blue-400 font-medium whitespace-nowrap">
-                                    {cluster.review_count} review{cluster.review_count !== 1 ? 's' : ''}
-                                  </span>
-                                  {isExpanded ? (
-                                    <ChevronUp className="w-4 h-4 text-blue-400" />
-                                  ) : (
-                                    <ChevronDown className="w-4 h-4 text-blue-400" />
-                                  )}
-                                </div>
-                              </div>
-                            </motion.button>
-                            
-                            <AnimatePresence>
-                              {isExpanded && details?.sample_reviews && (
-                                <motion.div
-                                  initial={{ height: 0, opacity: 0 }}
-                                  animate={{ height: "auto", opacity: 1 }}
-                                  exit={{ height: 0, opacity: 0 }}
-                                  transition={{ duration: 0.25, ease: "easeInOut" }}
-                                  className="border-t border-blue-500/20"
-                                >
-                                  <div className="p-4 space-y-3 bg-black/20">
-                                    <p className="text-xs text-blue-400 font-semibold uppercase tracking-wider">
-                                      Sample Reviews ({details.sample_reviews.length})
-                                    </p>
-                                    {details.sample_reviews.map((review, idx) => (
-                                      <div key={idx} className="p-3 rounded-md bg-blue-500/5 border border-blue-500/10">
-                                        <div className="flex items-start gap-2 mb-2">
-                                          {review.rating && (
-                                            <div className="flex items-center gap-1">
-                                              {Array.from({ length: 5 }).map((_, i) => (
-                                                <Star
-                                                  key={i}
-                                                  className={`w-3 h-3 ${
-                                                    i < review.rating
-                                                      ? 'fill-yellow-500 text-yellow-500'
-                                                      : 'text-neutral-700'
-                                                  }`}
-                                                />
-                                              ))}
-                                            </div>
-                                          )}
-                                          {review.device && (
-                                            <span className="text-xs text-neutral-500">• {review.device}</span>
-                                          )}
-                                          {review.version && (
-                                            <span className="text-xs text-neutral-500">• v{review.version}</span>
-                                          )}
-                                        </div>
-                                        <p className="text-sm text-neutral-300 leading-relaxed whitespace-pre-wrap">
-                                          {review.content}
-                                        </p>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </motion.div>
-                        );
-                      })}
-                  </div>
-                </motion.div>
-              )}
-            </div>
-          </SpotlightCard>
-        </motion.div>
+      {/* â”€â”€ Ticket Export Modal â”€â”€ */}
+      {exportCluster && (
+        <TicketExportModal
+          cluster={{
+            ...exportCluster,
+            ...(clusterDetails.get(exportCluster.id) ?? {}),
+          }}
+          appName={analytics.upload_data?.filename?.replace(/\.csv$/i, '') ?? undefined}
+          onClose={() => setExportCluster(null)}
+        />
       )}
     </div>
   );

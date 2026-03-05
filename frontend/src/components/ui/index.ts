@@ -12,3 +12,5 @@ export { EmptyState } from "./EmptyState";
 export type { Severity, TicketCardProps } from "./TicketCard";
 export { Preloader } from "./Preloader";
 export { CursorGlow } from "./CursorGlow";
+export { TicketExportModal } from "./TicketExportModal";
+export type { ExportableCluster } from "./TicketExportModal";

@@ -1,105 +1,88 @@
-# Roast - Turn Brutal Reviews into Engineering Tickets 🔥
+﻿# Roast 🔥
 
-AI-powered SaaS that turns brutal user feedback into actionable engineering tickets.
+**Turn app store reviews into engineering tickets — automatically.**
 
-## 🏗️ Architecture
+Roast ingests raw user reviews, clusters them by semantic similarity, runs LLM-powered Root Cause Analysis, and exports structured tickets straight to GitHub Issues or Linear.
+
+---
+
+## Stack
+
+| Layer | Tech |
+|---|---|
+| Backend | FastAPI · Python 3.11 · SQLModel · ChromaDB |
+| AI | Sentence-Transformers (`all-MiniLM-L6-v2`) · LLM (configurable) |
+| Frontend | Next.js 14 (App Router) · TypeScript · Tailwind · TanStack Query |
+| Infra | Shadow deployment · Drift monitoring · Adversarial detection |
+
+---
+
+## How it works
 
 ```
-/backend   - Python 3.11 + FastAPI + ChromaDB + Sentence-Transformers
-/frontend  - Next.js 14 + TypeScript + Tailwind CSS + Shadcn UI
+CSV Upload → Schema Detection → Noise Filter → Semantic Clustering
+     → Severity Classification (CRITICAL / HIGH / MEDIUM / LOW)
+     → LLM Summaries + RCA per cluster
+     → Export to GitHub Issues / Linear / Markdown
 ```
 
-## 🚀 Quick Start
+1. **Upload** — drop any reviews CSV; auto-detects 13+ column formats
+2. **Cluster** — ChromaDB groups semantically similar complaints
+3. **Classify** — each cluster gets a severity + drift/regression flags
+4. **Analyze** — background job generates 7-section RCA (hypothesis → fix → prevention)
+5. **Export** — one-click ticket to GitHub Issues or Linear with full context
 
-### Backend Setup
+---
+
+## Quick Start
 
 ```bash
-cd backend
-python -m venv venv
-.\venv\Scripts\activate  # Windows
+# Backend
+cd backend && python -m venv venv && .\venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload          # → localhost:8000
+
+# Frontend
+cd frontend && npm install
+npm run dev                            # → localhost:3000
 ```
 
-Backend runs on `http://localhost:8000`
+---
 
-### Frontend Setup
+## Key API Routes
 
+```
+POST /api/upload            Upload reviews CSV
+GET  /api/uploads           List all uploads
+GET  /api/clusters          Get clusters for an upload
+GET  /api/severity-summary  LLM-generated category summaries
+GET  /health                Health check
+```
+
+---
+
+## Production Features
+
+- **Shadow Deployment** — runs v1/v2/v3 pipelines in parallel, compares drift
+- **Adversarial Detection** — flags spam campaigns, coordinated bots, template attacks
+- **Regression Detection** — Jaccard similarity tracks if a fixed bug resurfaces
+- **RCA Engine** — async background job generates Root Cause Analysis for top CRITICAL/HIGH clusters
+- **Structured Logging** — full request traceability with correlation IDs
+
+---
+
+## Deploy
+
+**Frontend → Vercel**
 ```bash
-cd frontend
-npm install
-npm run dev
+NEXT_PUBLIC_API_URL=https://your-backend.com
 ```
 
-Frontend runs on `http://localhost:3000`
-
-## 📋 Features
-
-### Core Pipeline
-- **CSV Upload** - Drag & drop app reviews CSV
-- **🧠 Schema Intelligence** - Auto-detects 13+ text column formats (see [SCHEMA_INTELLIGENCE.md](./SCHEMA_INTELLIGENCE.md))
-- **Noise Filtering** - Removes generic "good app" reviews
-- **Deduplication** - ChromaDB clusters similar complaints
-- **Metadata Extraction** - Auto-detects versions & devices
-- **Severity Detection** - Classifies issues (critical/high/medium/low)
-- **Cluster View** - Visualize grouped issues
-
-### Production Features
-- **Shadow Deployment** - v1/v2/v3 parallel processing with drift monitoring
-- **Adversarial Detection** - Identifies spam, coordinated attacks, template patterns
-- **Resource Tracking** - Normalized CPU metrics, memory profiling
-- **Structured Logging** - Full request traceability with correlation IDs
-
-## 📚 Documentation
-
-- [SCHEMA_INTELLIGENCE.md](./SCHEMA_INTELLIGENCE.md) - Intelligent CSV schema detection
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - System architecture overview
-- [BACKEND_ARCHITECTURE.md](./BACKEND_ARCHITECTURE.md) - Backend design
-- [FRONTEND_SETUP.md](./FRONTEND_SETUP.md) - Frontend setup guide
-- [RUN_PROJECT.md](./RUN_PROJECT.md) - Complete running instructions
-
-## 🧪 Testing
-
-```bash
-# Test backend pipeline
-python test_pipeline.py
+**Backend → Railway / Render**
+```
+web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
-## 🌐 Deployment
+---
 
-### Frontend (Vercel)
-
-1. Connect your GitHub repo to Vercel
-2. Set environment variable: `NEXT_PUBLIC_API_URL=<your-backend-url>`
-3. Deploy
-
-### Backend (Railway/Render)
-
-1. Add `Procfile`:
-   ```
-   web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-   ```
-2. Deploy to Railway or Render
-
-## 📊 Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Backend Framework | FastAPI |
-| Vector Store | ChromaDB |
-| Embeddings | sentence-transformers/all-MiniLM-L6-v2 |
-| Frontend | Next.js 14 (App Router) |
-| UI Components | Shadcn UI + Tailwind CSS |
-| State Management | TanStack Query |
-| Data Validation | Pydantic V2 |
-
-## 🔑 API Endpoints
-
-- `GET /health` - Health check
-- `POST /upload` - Upload CSV for processing
-- `GET /clusters` - Get all roast clusters
-- `GET /clusters/{id}` - Get specific cluster
-
-## 📄 License
-
-MIT
+MIT License

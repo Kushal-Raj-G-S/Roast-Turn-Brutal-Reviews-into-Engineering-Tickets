@@ -62,6 +62,10 @@ class Cluster(SQLModel, table=True):
     review_count: int = Field(default=0)
     assigned_to: Optional[str] = Field(default=None)
     assigned_at: Optional[datetime] = Field(default=None)
+
+    # Fix Verification Loop — set by shadow_deployment.py after processing
+    regression_detected: Optional[bool] = Field(default=False)
+    regression_of_title: Optional[str] = Field(default=None)
     
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
