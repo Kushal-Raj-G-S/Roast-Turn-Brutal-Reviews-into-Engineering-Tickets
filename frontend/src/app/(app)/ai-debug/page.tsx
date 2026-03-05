@@ -682,7 +682,7 @@ function ExplanationPanel({
   uploadId,
 }: {
   explanation: CategoryExplanation;
-  s: (typeof SEV)["critical"];
+  s: (typeof SEV)[keyof typeof SEV];
   severity: string;
   uploadId: string | null;
 }) {
@@ -799,7 +799,7 @@ function PromptPanel({
 }: {
   clusters: Cluster[];
   selectedId: number | null;
-  s: (typeof SEV)["critical"];
+  s: (typeof SEV)[keyof typeof SEV];
   copiedId: number | null;
   copyPrompt: (c: Cluster) => void;
   appName: string;
