@@ -29,6 +29,7 @@ class Profile(Base):
     full_name = Column(Text, nullable=True)
     avatar_url = Column(Text, nullable=True)
     provider = Column(Text, nullable=True)  # 'email', 'google', 'github'
+    plan = Column(Text, nullable=False, server_default="free")  # free | starter | pro | business | enterprise
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     

@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Import routers
 from app.routes.auth_routes_supabase import router as auth_router
+from app.routes.plan_routes import router as plan_router
 
 # Configure logging
 logging.basicConfig(
@@ -73,6 +74,7 @@ app = FastAPI(
 
 # Include v1 routers (legacy)
 app.include_router(auth_router)
+app.include_router(plan_router)
 
 # Include v2 routers (new architecture) if enabled
 if os.getenv("ENABLE_V2_ARCHITECTURE", "true").lower() == "true":

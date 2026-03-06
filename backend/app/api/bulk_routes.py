@@ -15,6 +15,7 @@ from sqlmodel import Session, select, func
 
 from app.models.bulk_models import Upload, Cluster
 from app.core.config import config
+from app.core.plans import get_limits, uploads_unlimited, reviews_unlimited
 from app.database.auth_supabase import get_current_user
 from app.models.models_supabase import Profile
 from app.core.shadow_deployment import schedule_shadow_deployment
@@ -124,6 +125,34 @@ async def bulk_upload(
         # Validate file type
         if not file.filename.endswith('.csv'):
             raise HTTPException(status_code=400, detail="Only CSV files are supported")
+
+        # ── Plan enforcement ──────────────────────────────────────────────────
+        plan = getattr(user, "plan", "free") or "free"
+        limits = get_limits(plan)
+
+        # 1. Monthly upload count check
+        if not uploads_unlimited(plan):
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            used_this_month = session.exec(
+                select(func.count(Upload.id)).where(
+                    Upload.user_id == user.id,
+                    Upload.created_at >= month_start,
+                )
+            ).one() or 0
+            if used_this_month >= limits["uploads_per_month"]:
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "code": "UPLOAD_LIMIT_REACHED",
+                        "message": f"You've used all {limits['uploads_per_month']} uploads for this month on the {limits['label']} plan.",
+                        "plan": plan,
+                        "uploads_used": used_this_month,
+                        "uploads_limit": limits["uploads_per_month"],
+                    },
+                )
+        # ─────────────────────────────────────────────────────────────────────
         
         # Check file size (in MB)
         file.file.seek(0, 2)  # Seek to end
@@ -136,6 +165,24 @@ async def bulk_upload(
                 status_code=400,
                 detail=f"File too large. Max size: {config.MAX_UPLOAD_SIZE_MB}MB"
             )
+
+        # 2. Row-count (review) limit — quick pre-flight count
+        if not reviews_unlimited(plan):
+            file.file.seek(0)
+            raw = await file.read()
+            file.file.seek(0)
+            row_count = raw.count(b"\n")  # fast approximation (header not counted)
+            if row_count > limits["max_reviews"]:
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "code": "REVIEW_LIMIT_EXCEEDED",
+                        "message": f"File contains ~{row_count:,} rows but your {limits['label']} plan allows {limits['max_reviews']:,} reviews per upload.",
+                        "plan": plan,
+                        "row_count": row_count,
+                        "reviews_limit": limits["max_reviews"],
+                    },
+                )
         
         # Create upload directory
         config.ensure_upload_dir()
