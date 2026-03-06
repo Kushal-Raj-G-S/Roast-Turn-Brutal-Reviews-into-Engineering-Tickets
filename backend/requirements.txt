@@ -17,11 +17,8 @@ numpy>=1.26.0
 
 # Vector Store & Embeddings
 chromadb>=0.4.22
-sentence-transformers>=2.2.2
-
-# ML/AI Dependencies (for sentence-transformers)
-torch>=2.1.0
-transformers>=4.36.0
+# sentence-transformers / torch removed — HF Inference API used for embeddings on prod;
+# sklearn TF-IDF+SVD used as zero-torch fallback for local dev
 
 # Utilities
 python-dotenv>=1.0.0

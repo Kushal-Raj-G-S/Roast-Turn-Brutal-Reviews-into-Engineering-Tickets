@@ -9,16 +9,18 @@ class RoastMemory:
     """Vector memory layer using ChromaDB and Sentence-Transformers."""
 
     def __init__(self, persist_path: str = "./chroma_db"):
-        """Initialize ChromaDB and embedding model (lazy imports to save startup RAM)."""
+        """Initialize ChromaDB (lazy import). Embeddings via EmbeddingBackend (no torch)."""
         import chromadb  # lazy import — ~100 MB, only load when actually used
-        from sentence_transformers import SentenceTransformer  # lazy import — loads torch
+        from app.services.bulk_embedding import EmbeddingBackend
         self.client = chromadb.PersistentClient(path=persist_path)
         self.collection = self.client.get_or_create_collection(name="roasts")
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
-    
+        self._backend = EmbeddingBackend()
+
     def get_embedding(self, text: str) -> list[float]:
-        """Generate embedding vector for text."""
-        return self.model.encode(text).tolist()
+        """Generate embedding vector for text via EmbeddingBackend (HF API or TF-IDF)."""
+        import numpy as np
+        vecs = self._backend.encode_batch([text])
+        return vecs[0].tolist() if isinstance(vecs, np.ndarray) and vecs.ndim == 2 else list(vecs)
     
     def find_similar(self, text: str, threshold: float = 0.3) -> Optional[str]:
         """

@@ -1,8 +1,14 @@
 """
-Embedding backend — uses HuggingFace Inference API when HUGGINGFACE_API_KEY is set,
-falls back to local sentence-transformers otherwise.
+Embedding backend — three-tier, memory-safe:
 
-HF API removes the ~450 MB torch footprint entirely, making the app safe on 1 GB plans.
+  Tier 1 (prod):  HuggingFace Inference API   — zero torch, ~5 MB RAM
+                  activated when HUGGINGFACE_API_KEY env var is set
+
+  Tier 2 (dev):   sklearn TF-IDF + TruncatedSVD — zero torch, ~15 MB RAM
+                  512-dim LSA vectors, good enough for clustering
+
+  torch / sentence-transformers are intentionally NOT imported anywhere.
+  They are removed from requirements.txt to prevent accidental installation.
 """
 
 import logging
@@ -17,15 +23,17 @@ from app.core.config import config
 
 logger = logging.getLogger(__name__)
 
-# HuggingFace Inference API config
+# ── Tier 1: HuggingFace Inference API ──────────────────────────────────────
 _HF_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 _HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 _HF_API_URL = f"https://api-inference.huggingface.co/models/{_HF_MODEL}"
-_HF_BATCH_SIZE = 64   # HF API can handle up to ~100 texts per request
+_HF_BATCH_SIZE = 64
 
-# Local model fallback singleton
-_GLOBAL_MODEL_INSTANCE = None
-_GLOBAL_MODEL_LOCK = threading.Lock()
+# ── Tier 2: sklearn TF-IDF + SVD singleton ─────────────────────────────────
+_TFIDF_LOCK = threading.Lock()
+_TFIDF_VECTORIZER: Any = None
+_TFIDF_SVD: Any = None
+_TFIDF_DIM = 384   # match all-MiniLM-L6-v2 output dimension
 
 
 def _hf_encode_batch(texts: List[str]) -> np.ndarray:
@@ -33,7 +41,7 @@ def _hf_encode_batch(texts: List[str]) -> np.ndarray:
     import httpx
 
     headers = {"Authorization": f"Bearer {_HF_API_KEY}"}
-    all_embeddings = []
+    all_embeddings: list = []
 
     for i in range(0, len(texts), _HF_BATCH_SIZE):
         batch = texts[i: i + _HF_BATCH_SIZE]
@@ -47,7 +55,6 @@ def _hf_encode_batch(texts: List[str]) -> np.ndarray:
                     timeout=60.0,
                 )
                 if resp.status_code == 503:
-                    # Model warming up — wait and retry
                     wait = resp.json().get("estimated_time", 20)
                     logger.info(f"HF model warming up, waiting {wait}s...")
                     time.sleep(min(wait, 30))
@@ -63,73 +70,89 @@ def _hf_encode_batch(texts: List[str]) -> np.ndarray:
     return np.array(all_embeddings, dtype="float32")
 
 
-def get_global_model(model_name: str = None) -> Any:
-    """Get or create the local singleton embedding model (lazy-loaded fallback)."""
-    global _GLOBAL_MODEL_INSTANCE
+def _tfidf_encode(texts: List[str]) -> np.ndarray:
+    """
+    Tier-2 fallback: TF-IDF vectorisation + Truncated SVD (LSA).
+    Uses only sklearn/scipy/numpy — no torch, no HF download.
+    On first call, fits the vectoriser+SVD on the input texts.
+    """
+    global _TFIDF_VECTORIZER, _TFIDF_SVD
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.preprocessing import normalize
 
-    if _GLOBAL_MODEL_INSTANCE is None:
-        with _GLOBAL_MODEL_LOCK:
-            if _GLOBAL_MODEL_INSTANCE is None:
-                from sentence_transformers import SentenceTransformer  # lazy import
-                model_name = model_name or config.MODEL_NAME
-                logger.info(f"🔧 Loading local embedding model (fallback): {model_name}")
-                _GLOBAL_MODEL_INSTANCE = SentenceTransformer(model_name)
-                logger.info(f"✅ Local model loaded. dim={_GLOBAL_MODEL_INSTANCE.get_sentence_embedding_dimension()}")
+    with _TFIDF_LOCK:
+        if _TFIDF_VECTORIZER is None:
+            logger.info("🔧 Tier-2 fallback: fitting TF-IDF + TruncatedSVD (no torch)")
+            # Fit on same corpus — gives per-batch coherent embeddings
+            vect = TfidfVectorizer(
+                max_features=8000,
+                sublinear_tf=True,
+                strip_accents="unicode",
+                analyzer="word",
+                ngram_range=(1, 2),
+                min_df=1,
+            )
+            tfidf_matrix = vect.fit_transform(texts)
+            n_components = min(_TFIDF_DIM, tfidf_matrix.shape[1] - 1, tfidf_matrix.shape[0] - 1)
+            svd = TruncatedSVD(n_components=n_components, random_state=42)
+            svd.fit(tfidf_matrix)
+            _TFIDF_VECTORIZER = vect
+            _TFIDF_SVD = svd
+            logger.info(f"✅ TF-IDF+SVD fitted. Output dim: {n_components}")
 
-    return _GLOBAL_MODEL_INSTANCE
+    tfidf_matrix = _TFIDF_VECTORIZER.transform(texts)
+    embeddings = _TFIDF_SVD.transform(tfidf_matrix).astype("float32")
+    return normalize(embeddings, norm="l2")
+
+
+# ── Legacy compat stub (no-op — torch is gone) ─────────────────────────────
+def get_global_model(model_name: str = None) -> None:
+    """Deprecated stub kept for import compat. torch is no longer used."""
+    logger.warning("get_global_model() called but torch is removed — using TF-IDF fallback")
+    return None
 
 
 class EmbeddingBackend:
     """
-    Embedding backend with automatic HF API / local fallback.
+    Memory-safe embedding backend.
 
-    If HUGGINGFACE_API_KEY is set → uses HF Inference API (zero torch, ~5 MB RAM).
-    Otherwise → loads sentence-transformers locally (~450 MB torch).
+    Tier 1 — HF Inference API  (HUGGINGFACE_API_KEY set): zero torch, ~5 MB.
+    Tier 2 — sklearn TF-IDF+SVD (no key):                 zero torch, ~15 MB.
 
-    Interface is identical to the old class — no other code needs to change.
+    encode_batch / encode_parallel interface unchanged — callers unaffected.
     """
 
     def __init__(self, model_name: str = None):
         self.model_name = model_name or config.MODEL_NAME
         self._use_hf = bool(_HF_API_KEY)
         if self._use_hf:
-            logger.info(f"✅ EmbeddingBackend: using HuggingFace API ({_HF_MODEL}) — torch not loaded")
+            logger.info(f"✅ EmbeddingBackend: Tier-1 HuggingFace API ({_HF_MODEL}) — torch not loaded")
         else:
-            logger.warning("⚠️  HUGGINGFACE_API_KEY not set — falling back to local torch model")
-            self.model = get_global_model(self.model_name)
+            logger.warning(
+                "⚠️  HUGGINGFACE_API_KEY not set — Tier-2 TF-IDF+SVD fallback active (no torch)"
+            )
 
     def _load_model(self):
-        """Legacy compat — no-op when using HF API."""
-        if not self._use_hf:
-            self.model = get_global_model(self.model_name)
+        """Legacy compat — no-op."""
+        pass
 
     def encode_batch(
         self,
         texts: List[str],
         batch_size: int = None,
-        show_progress: bool = False
+        show_progress: bool = False,
     ) -> np.ndarray:
-        """
-        Encode texts to embeddings.
-        Uses HF Inference API when key present, local model otherwise.
-        """
+        """Encode texts → float32 embeddings. HF API or TF-IDF, never torch."""
         if not texts:
             return np.array([])
 
-        logger.info(f"Encoding {len(texts)} texts via {'HF API' if self._use_hf else 'local model'}")
+        backend = "HF API" if self._use_hf else "TF-IDF+SVD"
+        logger.info(f"Encoding {len(texts)} texts via {backend}")
 
         if self._use_hf:
             return _hf_encode_batch(texts)
-
-        # Local fallback
-        batch_size = batch_size or config.BATCH_SIZE
-        return self.model.encode(
-            texts,
-            batch_size=batch_size,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-            normalize_embeddings=False,
-        )
+        return _tfidf_encode(texts)
 
     def encode_parallel(
         self,
@@ -137,21 +160,10 @@ class EmbeddingBackend:
         batch_size: int = None,
         num_workers: int = None,
     ) -> np.ndarray:
-        """Parallel encoding — routes through encode_batch (HF API is already async-friendly)."""
-        if not texts:
-            return np.array([])
-        # HF API handles batching internally; local model uses single process only on 1 vCPU
+        """Routes to encode_batch — parallel not needed (API / in-memory ops)."""
         return self.encode_batch(texts, batch_size=batch_size)
 
 
 def _encode_chunk_worker(texts: List[str], model_name: str, batch_size: int) -> np.ndarray:
-    """Legacy multiprocessing worker — used only when HF API is unavailable."""
-    from sentence_transformers import SentenceTransformer  # lazy import
-    model = SentenceTransformer(model_name)
-    return model.encode(
-        texts,
-        batch_size=batch_size,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-        normalize_embeddings=False,
-    )
+    """Legacy stub — redirects to TF-IDF (torch removed)."""
+    return _tfidf_encode(texts)

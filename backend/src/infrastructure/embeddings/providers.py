@@ -8,7 +8,10 @@ import hashlib
 from typing import List, Optional, Dict
 import numpy as np
 
-from sentence_transformers import SentenceTransformer
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:  # torch removed in prod — HF API used instead
+    SentenceTransformer = None  # type: ignore[assignment,misc]
 
 from ...domain.services import IEmbeddingProvider
 from ...domain.value_objects import EmbeddingVector
