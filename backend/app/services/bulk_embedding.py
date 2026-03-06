@@ -7,10 +7,9 @@ Uses singleton pattern to prevent multiple model loads.
 import logging
 import multiprocessing as mp
 import threading
-from typing import List
+from typing import Any, List
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from app.core.config import config
 
@@ -21,18 +20,19 @@ _GLOBAL_MODEL_INSTANCE = None
 _GLOBAL_MODEL_LOCK = threading.Lock()
 
 
-def get_global_model(model_name: str = None) -> SentenceTransformer:
-    """Get or create the global singleton embedding model."""
+def get_global_model(model_name: str = None) -> Any:
+    """Get or create the global singleton embedding model (lazy-loaded)."""
     global _GLOBAL_MODEL_INSTANCE
-    
+
     if _GLOBAL_MODEL_INSTANCE is None:
         with _GLOBAL_MODEL_LOCK:
             if _GLOBAL_MODEL_INSTANCE is None:
+                from sentence_transformers import SentenceTransformer  # lazy import
                 model_name = model_name or config.MODEL_NAME
                 logger.info(f"🔧 Loading embedding model (singleton): {model_name}")
                 _GLOBAL_MODEL_INSTANCE = SentenceTransformer(model_name)
                 logger.info(f"✅ Model loaded once. Embedding dimension: {_GLOBAL_MODEL_INSTANCE.get_sentence_embedding_dimension()}")
-    
+
     return _GLOBAL_MODEL_INSTANCE
 
 
@@ -167,7 +167,8 @@ def _encode_chunk_worker(texts: List[str], model_name: str, batch_size: int) -> 
     Returns:
         Embeddings for this chunk
     """
-    # Each worker loads its own model
+    # Each worker loads its own model (lazy import so torch doesn't load at startup)
+    from sentence_transformers import SentenceTransformer  # lazy import
     model = SentenceTransformer(model_name)
     
     embeddings = model.encode(

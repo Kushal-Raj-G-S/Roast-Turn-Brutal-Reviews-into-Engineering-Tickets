@@ -3,15 +3,15 @@ Roast Memory - ChromaDB Vector Service
 """
 
 from typing import Optional
-import chromadb
-from sentence_transformers import SentenceTransformer
 
 
 class RoastMemory:
     """Vector memory layer using ChromaDB and Sentence-Transformers."""
-    
+
     def __init__(self, persist_path: str = "./chroma_db"):
-        """Initialize ChromaDB and embedding model."""
+        """Initialize ChromaDB and embedding model (lazy imports to save startup RAM)."""
+        import chromadb  # lazy import — ~100 MB, only load when actually used
+        from sentence_transformers import SentenceTransformer  # lazy import — loads torch
         self.client = chromadb.PersistentClient(path=persist_path)
         self.collection = self.client.get_or_create_collection(name="roasts")
         self.model = SentenceTransformer("all-MiniLM-L6-v2")
