@@ -17,7 +17,8 @@ const pricingTiers = [
     period: "/forever",
     description: "Perfect for testing and small projects",
     features: [
-      "Up to 5 dataset uploads",
+      "3 dataset uploads/month",
+      "Up to 10,000 reviews per file",
       "AI-powered cluster analysis",
       "Sentiment & severity scoring",
       "CSV export",
@@ -28,36 +29,74 @@ const pricingTiers = [
     highlight: false,
   },
   {
+    name: "Starter",
+    price: "$10",
+    period: "/month",
+    description: "For solo devs and indie makers",
+    features: [
+      "10 dataset uploads/month",
+      "Up to 10,000 reviews per file",
+      "AI-powered cluster analysis",
+      "Sentiment & severity scoring",
+      "CSV export",
+      "Full analytics dashboard",
+      "Email support",
+    ],
+    cta: "Get Started",
+    highlight: false,
+  },
+  {
     name: "Pro",
-    price: "$49",
+    price: "$25",
     period: "/month",
     description: "For teams analyzing user feedback regularly",
     features: [
-      "Up to 30 dataset uploads/month",
+      "50 dataset uploads/month",
+      "Up to 100,000 reviews per file",
       "Advanced cluster insights",
       "Priority & noise filtering",
       "Full analytics dashboard",
-      "Email support",
+      "AI Debug Center access",
       "Data export (CSV/JSON)",
       "Upload history & archive",
+      "Email support",
     ],
     cta: "Start Free Trial",
     highlight: true,
   },
   {
+    name: "Business",
+    price: "$49",
+    period: "/month",
+    description: "For high-volume teams and product orgs",
+    features: [
+      "100 dataset uploads/month",
+      "Up to 100,000 reviews per file",
+      "Everything in Pro",
+      "Dedicated processing priority",
+      "API access",
+      "Custom cluster models",
+      "Team collaboration tools",
+      "Priority support (24/7)",
+      "SLA guarantees",
+    ],
+    cta: "Get Business",
+    highlight: false,
+  },
+  {
     name: "Enterprise",
     price: "Custom",
     period: "",
-    description: "For organizations with high-volume needs",
+    description: "For organizations with enterprise-scale needs",
     features: [
       "Unlimited dataset uploads",
-      "Dedicated processing infrastructure",
-      "Custom cluster models",
-      "API access",
-      "Priority support (24/7)",
+      "Unlimited reviews per file",
+      "Everything in Business",
+      "Dedicated infrastructure",
       "Custom integrations",
-      "Team collaboration tools",
-      "SLA guarantees",
+      "SSO & advanced security",
+      "Onboarding & training",
+      "Custom SLA",
     ],
     cta: "Contact Sales",
     highlight: false,
@@ -92,7 +131,7 @@ export default function PricingPage() {
       {/* Pricing Cards */}
       <section className="relative pb-32">
         <div className="max-w-7xl mx-auto px-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
             {pricingTiers.map((tier, index) => (
               <motion.div
                 key={tier.name}
@@ -133,7 +172,7 @@ export default function PricingPage() {
                   ))}
                 </ul>
 
-                <Link href="/login" className="block">
+                <Link href={tier.name === "Enterprise" ? "mailto:hello@roast.systems" : "/login"} className="block">
                   <motion.button
                     className={`w-full py-3 px-6 rounded-full font-semibold flex items-center justify-center gap-2 uppercase tracking-wider text-sm ${
                       tier.highlight
@@ -169,19 +208,51 @@ export default function PricingPage() {
             {[
               {
                 question: "Can I change plans later?",
-                answer: "Yes! You can upgrade or downgrade at any time. Changes take effect immediately.",
+                answer: "Yes — upgrade or downgrade at any time. Changes take effect immediately and you're only billed for the new plan going forward.",
               },
               {
-                question: "What happens if I exceed my review limit?",
-                answer: "We'll notify you when you reach 80% of your limit. You can upgrade anytime to avoid interruptions.",
+                question: "What happens if I exceed my upload or review limit?",
+                answer: "Uploads over your monthly limit are hard-blocked with an upgrade prompt. We'll also warn you when you hit 80% so you're never caught off-guard.",
+              },
+              {
+                question: "What counts as a 'review'?",
+                answer: "Each row in your uploaded CSV counts as one review. Our noise filter removes low-quality entries before analysis, but the raw row count is used for limit checks.",
+              },
+              {
+                question: "Is the 14-day free trial on all paid plans?",
+                answer: "Yes — every paid plan (Starter, Pro, Business) includes a 14-day free trial. No credit card required to start.",
               },
               {
                 question: "Do you offer refunds?",
-                answer: "Yes, we offer a 30-day money-back guarantee on all annual plans.",
+                answer: "Yes, we offer a 30-day money-back guarantee on all paid plans, no questions asked.",
               },
               {
-                question: "Is there a contract?",
-                answer: "No contracts. All plans are month-to-month and you can cancel anytime.",
+                question: "Is there a contract or lock-in?",
+                answer: "No contracts. All plans are month-to-month and you can cancel any time from your account settings.",
+              },
+              {
+                question: "What file formats do you support?",
+                answer: "CSV is the primary format. Your file must contain a text column with review content. Column names like 'review', 'content', 'text', or 'comment' are auto-detected.",
+              },
+              {
+                question: "How does the AI analysis work?",
+                answer: "Roast runs your reviews through a noise filter, groups them into semantic clusters using vector embeddings, assigns severity scores (Critical → Low), and generates a root cause analysis for each cluster using an LLM.",
+              },
+              {
+                question: "Can I use Roast for apps on any platform?",
+                answer: "Yes — any review data in CSV format works. Google Play, App Store, Trustpilot, G2, Capterra, internal surveys — if you can export it to CSV, Roast can analyze it.",
+              },
+              {
+                question: "What is the AI Debug Center?",
+                answer: "The AI Debug Center (Pro+) gives you per-cluster root cause analysis, suggested fixes and code-level hints, severity reasoning, and exportable github issue templates.",
+              },
+              {
+                question: "Is my data private?",
+                answer: "Your uploaded data is processed in your account's isolated context, never used to train shared models, and deleted from processing storage after analysis completes.",
+              },
+              {
+                question: "Do you offer discounts for startups or students?",
+                answer: "Yes — reach out at hello@roast.systems with proof of student status or Y Combinator / accelerator membership and we'll sort you out.",
               },
             ].map((faq, index) => (
               <motion.div
