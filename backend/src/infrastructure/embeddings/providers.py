@@ -5,7 +5,7 @@ Supports multiple embedding models with caching and optimization.
 
 import logging
 import hashlib
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import numpy as np
 
 try:
@@ -17,6 +17,21 @@ from ...domain.services import IEmbeddingProvider
 from ...domain.value_objects import EmbeddingVector
 
 logger = logging.getLogger(__name__)
+
+
+class _TorchlessAdaptor:
+    """Wraps EmbeddingBackend to mimic the SentenceTransformer duck-type interface."""
+
+    def __init__(self, backend: Any):
+        self._backend = backend
+
+    def encode(self, texts, batch_size=128, convert_to_numpy=True, **_kwargs):
+        if isinstance(texts, str):
+            texts = [texts]
+        return self._backend.encode_batch(texts)
+
+    def get_sentence_embedding_dimension(self) -> int:
+        return 384
 
 
 class SentenceTransformerProvider(IEmbeddingProvider):
@@ -46,8 +61,14 @@ class SentenceTransformerProvider(IEmbeddingProvider):
         self._cache_misses = 0
 
     def _load_model(self):
-        """Lazy load the embedding model."""
+        """Lazy load the embedding model. Falls back to EmbeddingBackend if torch unavailable."""
         if self._model is None:
+            if SentenceTransformer is None:
+                # torch removed from prod — delegate to memory-safe EmbeddingBackend
+                from app.services.bulk_embedding import EmbeddingBackend
+                logger.info("sentence-transformers unavailable — using EmbeddingBackend (HF API / TF-IDF)")
+                self._model = _TorchlessAdaptor(EmbeddingBackend(self.model_name))
+                return
             logger.info(f"Loading embedding model: {self.model_name}")
             self._model = SentenceTransformer(self.model_name)
             logger.info(f"Model loaded. Dimension: {self._model.get_sentence_embedding_dimension()}")
