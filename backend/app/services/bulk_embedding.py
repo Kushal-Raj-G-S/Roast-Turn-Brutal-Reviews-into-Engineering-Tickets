@@ -36,8 +36,15 @@ _TFIDF_SVD: Any = None
 _TFIDF_DIM = 384   # match all-MiniLM-L6-v2 output dimension
 
 
+class _HFEndpointGone(Exception):
+    """Raised when HF Inference API returns 410 — endpoint permanently deprecated."""
+
+
 def _hf_encode_batch(texts: List[str]) -> np.ndarray:
-    """Call HuggingFace Inference API to get embeddings. Batches automatically."""
+    """Call HuggingFace Inference API to get embeddings. Batches automatically.
+
+    Raises _HFEndpointGone on 410 so callers can fall through to TF-IDF.
+    """
     import httpx
 
     headers = {"Authorization": f"Bearer {_HF_API_KEY}"}
@@ -54,6 +61,11 @@ def _hf_encode_batch(texts: List[str]) -> np.ndarray:
                     json={"inputs": batch},
                     timeout=60.0,
                 )
+                if resp.status_code == 410:
+                    raise _HFEndpointGone(
+                        f"HF Inference API endpoint gone (410): {_HF_API_URL} — "
+                        "falling back to TF-IDF tier"
+                    )
                 if resp.status_code == 503:
                     wait = resp.json().get("estimated_time", 20)
                     logger.info(f"HF model warming up, waiting {wait}s...")
@@ -62,6 +74,8 @@ def _hf_encode_batch(texts: List[str]) -> np.ndarray:
                 resp.raise_for_status()
                 all_embeddings.extend(resp.json())
                 break
+            except _HFEndpointGone:
+                raise  # propagate immediately, no retries
             except Exception as e:
                 if attempt == retries - 1:
                     raise RuntimeError(f"HF API failed after {retries} attempts: {e}") from e
@@ -143,15 +157,20 @@ class EmbeddingBackend:
         batch_size: int = None,
         show_progress: bool = False,
     ) -> np.ndarray:
-        """Encode texts → float32 embeddings. HF API or TF-IDF, never torch."""
+        """Encode texts → float32 embeddings. HF API → TF-IDF fallback, never torch."""
         if not texts:
             return np.array([])
 
-        backend = "HF API" if self._use_hf else "TF-IDF+SVD"
-        logger.info(f"Encoding {len(texts)} texts via {backend}")
-
         if self._use_hf:
-            return _hf_encode_batch(texts)
+            logger.info(f"Encoding {len(texts)} texts via HF API")
+            try:
+                return _hf_encode_batch(texts)
+            except _HFEndpointGone as e:
+                logger.warning(f"⚠️  {e}")
+                logger.warning("Permanently disabling HF API for this process — using TF-IDF+SVD")
+                self._use_hf = False  # don't try HF again this session
+
+        logger.info(f"Encoding {len(texts)} texts via TF-IDF+SVD")
         return _tfidf_encode(texts)
 
     def encode_parallel(
