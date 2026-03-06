@@ -25,6 +25,7 @@ transformers>=4.36.0
 
 # Utilities
 python-dotenv>=1.0.0
+psutil>=5.9.0           # System resource monitoring (CPU/memory tracking)
 
 # Database (PostgreSQL + ORM)
 sqlalchemy>=2.0.0
@@ -35,6 +36,7 @@ sqlmodel>=0.0.14  # SQLModel for type-safe ORM with Pydantic
 
 # ML/Clustering
 scikit-learn>=1.3.0  # For NearestNeighbors clustering
+faiss-cpu>=1.7.4     # Facebook AI Similarity Search (CPU build)
 
 # Authentication & Security
 supabase>=2.0.0

@@ -12,7 +12,6 @@ from uuid import UUID
 
 import numpy as np
 import pandas as pd
-import faiss
 from sklearn.neighbors import NearestNeighbors
 from sqlmodel import Session, select
 
@@ -379,6 +378,7 @@ class BulkProcessor:
             return []
         
         # Normalize embeddings for cosine similarity (required for inner product)
+        import faiss  # lazy import — only load when clustering is actually needed
         logger.info(f"{log_prefix} Normalizing embeddings for cosine similarity")
         faiss.normalize_L2(embeddings)  # In-place normalization
         
