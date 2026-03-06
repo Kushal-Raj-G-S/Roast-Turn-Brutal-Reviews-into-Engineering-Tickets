@@ -127,12 +127,16 @@ def get_engine(database_url: str):
     Returns:
         Engine instance
     """
+    # Use Transaction mode port if on Supabase pooler
+    database_url = database_url.replace(":5432/", ":6543/")
     engine = create_engine(
         database_url,
         echo=False,
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20
+        pool_size=2,      # reduced from 10
+        max_overflow=2,
+        pool_recycle=300,
+        pool_timeout=30,
     )
     return engine
 

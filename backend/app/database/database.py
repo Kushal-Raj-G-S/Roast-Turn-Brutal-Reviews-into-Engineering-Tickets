@@ -6,28 +6,35 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Database URL from environment variable
-DATABASE_URL = os.getenv(
+# Auto-switch port 5432 (Session mode) → 6543 (Transaction mode) for Supabase pooler.
+# Transaction mode supports far more concurrent clients on the free tier.
+_RAW_DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://user:password@localhost:5432/roast_db"
 )
+DATABASE_URL = _RAW_DATABASE_URL.replace(":5432/", ":6543/")
 
 # Async Database URL (convert postgresql:// to postgresql+asyncpg://)
 ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://") if DATABASE_URL.startswith("postgresql://") else DATABASE_URL
 
 # Create SQLAlchemy engine (sync)
+# pool_size=2 + max_overflow=2 = max 4 connections from this engine.
+# Supabase free tier Transaction mode allows ~100 concurrent connections.
 engine = create_engine(
     DATABASE_URL,
-    echo=False,  # Set to True for SQL query logging
-    pool_pre_ping=True,  # Verify connections before using
-    pool_size=10,
-    max_overflow=20,
-    pool_recycle=300,  # Recycle connections every 5 minutes (before Supabase timeout)
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=2,        # reduced from 10 — 4 total connections max
+    max_overflow=2,
+    pool_recycle=300,
+    pool_timeout=30,
     connect_args={
         "keepalives": 1,
         "keepalives_idle": 30,
@@ -36,17 +43,17 @@ engine = create_engine(
     }
 )
 
-# Create async engine for v2 architecture
+# Async engine uses NullPool — Transaction mode pooler manages its own pooling.
+# Using SQLAlchemy's pool on top of pgbouncer Transaction mode causes double-pooling
+# and connection exhaustion. NullPool opens/closes connections per-request (cheap
+# with pgbouncer because the underlying PG connection is reused by pgbouncer).
 async_engine = create_async_engine(
     ASYNC_DATABASE_URL,
     echo=False,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-    pool_recycle=300,  # Recycle connections every 5 minutes
+    poolclass=NullPool,  # let pgbouncer handle pooling
     connect_args={
         "server_settings": {"jit": "off"},
-        "command_timeout": 600,  # 10 minute timeout for long queries
+        "command_timeout": 60,
     }
 )
 
