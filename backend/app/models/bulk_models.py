@@ -151,6 +151,10 @@ def init_db(engine):
         engine: SQLAlchemy engine
     """
     SQLModel.metadata.create_all(engine)
+    
+    # Also ensure usage tracking table exists
+    from app.models.usage_models import UserMonthlyUsage
+    UserMonthlyUsage.metadata.create_all(engine)
 
 
 def get_session(engine):

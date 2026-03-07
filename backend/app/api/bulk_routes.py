@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select, func
 
 from app.models.bulk_models import Upload, Cluster
+from app.models.usage_models import get_monthly_usage, increment_upload_count
 from app.core.config import config
 from app.core.plans import get_limits, uploads_unlimited, reviews_unlimited
 from app.database.auth_supabase import get_current_user
@@ -132,15 +133,7 @@ async def bulk_upload(
 
         # 1. Monthly upload count check
         if not uploads_unlimited(plan):
-            from datetime import timezone
-            now = datetime.now(timezone.utc)
-            month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            used_this_month = session.exec(
-                select(func.count(Upload.id)).where(
-                    Upload.user_id == user.id,
-                    Upload.created_at >= month_start,
-                )
-            ).one() or 0
+            used_this_month = get_monthly_usage(session, str(user.id))
             if used_this_month >= limits["uploads_per_month"]:
                 raise HTTPException(
                     status_code=402,
@@ -199,6 +192,9 @@ async def bulk_upload(
         session.add(upload)
         session.commit()
         session.refresh(upload)
+        
+        # 🔥 INCREMENT USAGE COUNTER (after successful upload creation)
+        increment_upload_count(session, str(user.id))
         
         # Save file
         file_path = Path(config.UPLOAD_DIR) / f"{upload.id}.csv"

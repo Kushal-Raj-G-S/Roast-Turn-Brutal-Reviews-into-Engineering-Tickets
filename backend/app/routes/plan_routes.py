@@ -15,6 +15,7 @@ from sqlmodel import Session, select, func
 from app.database.auth_supabase import get_current_user
 from app.models.models_supabase import Profile
 from app.models.bulk_models import Upload
+from app.models.usage_models import get_monthly_usage, get_current_month
 from app.core.plans import VALID_PLANS, get_limits
 
 logger = logging.getLogger(__name__)
@@ -60,19 +61,12 @@ def _get_bulk_session():
 
 
 def _month_upload_count(session: Session, user_id) -> int:
-    """Count completed/processing uploads for the current calendar month."""
-    now = datetime.now(timezone.utc)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    result = session.exec(
-        select(func.count(Upload.id)).where(
-            Upload.user_id == user_id,
-            Upload.created_at >= month_start,
-        )
-    ).one()
-    return result or 0
+    """Count uploads for the current calendar month using usage tracking."""
+    return get_monthly_usage(session, str(user_id))
 
 
 def _next_reset() -> str:
+    """Return first day of next month as ISO date."""
     now = datetime.now(timezone.utc)
     if now.month == 12:
         return datetime(now.year + 1, 1, 1).date().isoformat()

@@ -195,16 +195,39 @@ export function HoloHeader() {
             ROAST
           </span>
           
-          {/* Plan Badge - replaces version badge */}
-          <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full border ${
+          {/* Enhanced Plan Badge with Usage */}
+          <div className={`px-2 py-0.5 text-[9px] font-medium rounded-full border flex items-center gap-1.5 ${
             userPlan?.plan === 'pro' ? 'text-orange-400 bg-orange-500/10 border-orange-500/30' :
             userPlan?.plan === 'business' ? 'text-purple-400 bg-purple-500/10 border-purple-500/30' :
             userPlan?.plan === 'enterprise' ? 'text-blue-400 bg-blue-500/10 border-blue-500/30' :
             userPlan?.plan === 'starter' ? 'text-green-400 bg-green-500/10 border-green-500/30' :
             'text-neutral-500 bg-neutral-900/50 border-white/5'
           }`} style={{ fontFamily: 'var(--font-inter)' }}>
-            {userPlan?.label || 'Free'}
-          </span>
+            <span className="font-bold">{userPlan?.label || 'Free'}</span>
+            {userPlan && userPlan.uploads_limit && (
+              <>
+                <div className="w-px h-2 bg-current opacity-30" />
+                <span className="opacity-75">
+                  {userPlan.uploads_used}/{userPlan.uploads_limit}
+                </span>
+                {/* Mini progress bar */}
+                <div className="w-3 h-1 bg-current/20 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-current rounded-full transition-all duration-300"
+                    style={{ 
+                      width: `${Math.min((userPlan.uploads_used / userPlan.uploads_limit) * 100, 100)}%` 
+                    }}
+                  />
+                </div>
+              </>
+            )}
+            {userPlan && !userPlan.uploads_limit && (
+              <>
+                <div className="w-px h-2 bg-current opacity-30" />
+                <span className="opacity-75">∞</span>
+              </>
+            )}
+          </div>
         </Link>
 
         {/* Center: Status / Breadcrumb */}

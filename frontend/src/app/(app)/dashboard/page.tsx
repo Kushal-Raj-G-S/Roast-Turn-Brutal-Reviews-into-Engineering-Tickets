@@ -10,6 +10,7 @@ import { motion } from "framer-motion";
 import { Flame, TrendingUp, Clock, CheckCircle2, Database, AlertTriangle } from "lucide-react";
 import { KanbanBoard, Ticket } from "@/components/ui";
 import { SpotlightCard } from "@/components/ui";
+import { UsageDashboard } from "@/components/dashboard/UsageDashboard";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
@@ -219,6 +220,15 @@ export default function DashboardPage() {
             </div>
           </SpotlightCard>
         ))}
+      </motion.div>
+
+      {/* Usage Dashboard */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+      >
+        <UsageDashboard />
       </motion.div>
 
       {/* Kanban Board with Real Data */}

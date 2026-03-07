@@ -7,7 +7,7 @@ from typing import Optional
 
 PLAN_LIMITS: dict[str, dict] = {
     "free": {
-        "uploads_per_month": 3,
+        "uploads_per_month": 5,
         "max_reviews": 10_000,
         "label": "Free",
     },
