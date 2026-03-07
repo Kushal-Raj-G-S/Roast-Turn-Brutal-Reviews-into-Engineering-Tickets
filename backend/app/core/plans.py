@@ -8,12 +8,12 @@ from typing import Optional
 PLAN_LIMITS: dict[str, dict] = {
     "free": {
         "uploads_per_month": 5,
-        "max_reviews": 10_000,
+        "max_reviews": 20_000,
         "label": "Free",
     },
     "starter": {
         "uploads_per_month": 10,
-        "max_reviews": 10_000,
+        "max_reviews": 50_000,
         "label": "Starter",
     },
     "pro": {
