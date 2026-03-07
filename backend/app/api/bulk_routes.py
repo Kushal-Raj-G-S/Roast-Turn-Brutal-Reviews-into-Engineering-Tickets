@@ -130,11 +130,16 @@ async def bulk_upload(
         # ── Plan enforcement ──────────────────────────────────────────────────
         plan = getattr(user, "plan", "free") or "free"
         limits = get_limits(plan)
+        
+        logger.info(f"🔍 Plan enforcement check for user {str(user.id)[:8]}... | plan={plan} | limit={limits['uploads_per_month']}")
 
         # 1. Monthly upload count check
         if not uploads_unlimited(plan):
             used_this_month = get_monthly_usage(session, str(user.id))
+            logger.info(f"📊 Monthly usage: {used_this_month}/{limits['uploads_per_month']} | unlimited={uploads_unlimited(plan)}")
+            
             if used_this_month >= limits["uploads_per_month"]:
+                logger.warning(f"⛔ LIMIT REACHED: {used_this_month} >= {limits['uploads_per_month']}")
                 raise HTTPException(
                     status_code=402,
                     detail={
@@ -145,6 +150,8 @@ async def bulk_upload(
                         "uploads_limit": limits["uploads_per_month"],
                     },
                 )
+            else:
+                logger.info(f"✅ Under limit: {used_this_month} < {limits['uploads_per_month']}")
         # ─────────────────────────────────────────────────────────────────────
         
         # Check file size (in MB)
