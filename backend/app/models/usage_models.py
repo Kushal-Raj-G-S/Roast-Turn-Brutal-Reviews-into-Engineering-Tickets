@@ -8,6 +8,7 @@ from typing import Optional
 from sqlmodel import SQLModel, Field, Session, select
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID
+import uuid
 
 
 class UserMonthlyUsage(SQLModel, table=True):
@@ -20,7 +21,13 @@ class UserMonthlyUsage(SQLModel, table=True):
     __tablename__ = "user_monthly_usage"
     
     id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: str = Field(foreign_key="profiles.id", nullable=False)
+    user_id: uuid.UUID = Field(
+        sa_column=Column(
+            UUID(as_uuid=True), 
+            ForeignKey("profiles.id", ondelete="CASCADE"),
+            nullable=False
+        )
+    )
     year_month: str = Field(nullable=False)  # "2026-03" format
     uploads_used: int = Field(default=0, nullable=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
