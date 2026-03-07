@@ -1,43 +1,11 @@
 """
-User usage tracking models.
-Separate from bulk_models.py since this is plan-related, not processing-related.
+User usage tracking - uses raw SQL to avoid FK resolution issues.
+Table exists in Supabase via migration (create_user_monthly_usage.sql).
 """
 
 from datetime import datetime
-from typing import Optional
-from sqlmodel import SQLModel, Field, Session, select
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID
-import uuid
-
-
-class UserMonthlyUsage(SQLModel, table=True):
-    """
-    Track monthly upload usage per user for plan enforcement.
-    
-    One record per user per month (YYYY-MM format).
-    Auto-created when first upload happens in a new month.
-    """
-    __tablename__ = "user_monthly_usage"
-    
-    id: Optional[int] = Field(default=None, primary_key=True)
-    user_id: uuid.UUID = Field(
-        sa_column=Column(
-            UUID(as_uuid=True), 
-            ForeignKey("profiles.id", ondelete="CASCADE"),
-            nullable=False
-        )
-    )
-    year_month: str = Field(nullable=False)  # "2026-03" format
-    uploads_used: int = Field(default=0, nullable=False)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    
-    class Config:
-        # Ensure unique constraint on (user_id, year_month)
-        table_args = (
-            Index("idx_user_monthly_usage_user_month", "user_id", "year_month", unique=True),
-        )
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 
 def get_current_month() -> str:
@@ -45,81 +13,100 @@ def get_current_month() -> str:
     return datetime.utcnow().strftime("%Y-%m")
 
 
-def get_or_create_usage_record(session: Session, user_id: str) -> UserMonthlyUsage:
+def get_or_create_usage_record(session: Session, user_id: str) -> dict:
     """
-    Get or create usage record for user in current month.
+    Get or create usage record for user in current month using raw SQL.
     
     Args:
         session: Database session
-        user_id: User UUID
+        user_id: User UUID string
         
     Returns:
-        UserMonthlyUsage record for current month
+        Dict with id, user_id, year_month, uploads_used
     """
     current_month = get_current_month()
     
-    # Try to get existing record
-    existing = session.exec(
-        select(UserMonthlyUsage).where(
-            UserMonthlyUsage.user_id == user_id,
-            UserMonthlyUsage.year_month == current_month
-        )
-    ).first()
+    # Use INSERT ... ON CONFLICT (upsert) to atomically get or create
+    query = text("""
+        INSERT INTO user_monthly_usage (user_id, year_month, uploads_used, created_at, updated_at)
+        VALUES (:user_id, :year_month, 0, NOW(), NOW())
+        ON CONFLICT (user_id, year_month) 
+        DO UPDATE SET updated_at = NOW()
+        RETURNING id, user_id::text, year_month, uploads_used
+    """)
     
-    if existing:
-        return existing
+    result = session.execute(
+        query,
+        {"user_id": user_id, "year_month": current_month}
+    ).fetchone()
     
-    # Create new record for this month
-    new_record = UserMonthlyUsage(
-        user_id=user_id,
-        year_month=current_month,
-        uploads_used=0
-    )
-    session.add(new_record)
     session.commit()
-    session.refresh(new_record)
     
-    return new_record
+    return {
+        "id": result[0],
+        "user_id": result[1],
+        "year_month": result[2],
+        "uploads_used": result[3]
+    }
 
 
 def increment_upload_count(session: Session, user_id: str) -> int:
     """
-    Increment upload count for current month.
+    Increment upload count for current month using raw SQL.
     
     Args:
         session: Database session  
-        user_id: User UUID
+        user_id: User UUID string
         
     Returns:
         New upload count after increment
     """
-    usage = get_or_create_usage_record(session, user_id)
-    usage.uploads_used += 1
-    usage.updated_at = datetime.utcnow()
-    session.add(usage)
+    current_month = get_current_month()
+    
+    # Upsert with increment
+    query = text("""
+        INSERT INTO user_monthly_usage (user_id, year_month, uploads_used, created_at, updated_at)
+        VALUES (:user_id, :year_month, 1, NOW(), NOW())
+        ON CONFLICT (user_id, year_month) 
+        DO UPDATE SET 
+            uploads_used = user_monthly_usage.uploads_used + 1,
+            updated_at = NOW()
+        RETURNING uploads_used
+    """)
+    
+    result = session.execute(
+        query,
+        {"user_id": user_id, "year_month": current_month}
+    ).fetchone()
+    
     session.commit()
     
-    return usage.uploads_used
+    return result[0]
 
 
 def get_monthly_usage(session: Session, user_id: str) -> int:
     """
-    Get current month upload usage for user.
+    Get current month upload usage for user using raw SQL.
     
     Args:
         session: Database session
-        user_id: User UUID
+        user_id: User UUID string
         
     Returns:
         Number of uploads used this month (0 if no record exists)
     """
     current_month = get_current_month()
     
-    usage = session.exec(
-        select(UserMonthlyUsage).where(
-            UserMonthlyUsage.user_id == user_id,
-            UserMonthlyUsage.year_month == current_month
-        )
-    ).first()
+    query = text("""
+        SELECT uploads_used 
+        FROM user_monthly_usage 
+        WHERE user_id = :user_id 
+        AND year_month = :year_month
+    """)
     
-    return usage.uploads_used if usage else 0
+    result = session.execute(
+        query,
+        {"user_id": user_id, "year_month": current_month}
+    ).fetchone()
+    
+    return result[0] if result else 0
