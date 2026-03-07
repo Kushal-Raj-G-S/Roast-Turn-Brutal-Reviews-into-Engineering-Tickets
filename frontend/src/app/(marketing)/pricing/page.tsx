@@ -12,7 +12,7 @@ const pricingTiers = [
     period: "/forever",
     description: "Perfect for testing and small projects",
     features: [
-      "3 uploads / month",
+      "5 uploads / month",
       "Up to 10,000 reviews per file",
       "AI cluster analysis",
       "Sentiment & severity scoring",
