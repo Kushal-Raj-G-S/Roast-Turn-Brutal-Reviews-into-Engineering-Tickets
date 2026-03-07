@@ -172,7 +172,11 @@ async def bulk_upload(
             raw = await file.read()
             file.file.seek(0)
             row_count = raw.count(b"\n")  # fast approximation (header not counted)
+            
+            logger.info(f"📝 Review count check: {row_count:,} rows | limit={limits['max_reviews']:,}")
+            
             if row_count > limits["max_reviews"]:
+                logger.warning(f"⛔ REVIEW LIMIT EXCEEDED: {row_count:,} > {limits['max_reviews']:,}")
                 raise HTTPException(
                     status_code=402,
                     detail={
@@ -183,6 +187,8 @@ async def bulk_upload(
                         "reviews_limit": limits["max_reviews"],
                     },
                 )
+            else:
+                logger.info(f"✅ Review count OK: {row_count:,} <= {limits['max_reviews']:,}")
         
         # Create upload directory
         config.ensure_upload_dir()
