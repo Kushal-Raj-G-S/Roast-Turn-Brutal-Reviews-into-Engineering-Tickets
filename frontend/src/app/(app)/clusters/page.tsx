@@ -60,11 +60,12 @@ export default function ClustersPage() {
 
       const user_id = session.user.id;
 
-      // Fetch all uploads for this user
+      // Fetch all completed uploads for this user (hide failed/pending)
       const { data: uploadsData, error } = await supabase
         .from('uploads')
         .select('*')
         .eq('user_id', user_id)
+        .eq('status', 'completed')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
