@@ -84,19 +84,27 @@ export function HoloHeader() {
         try {
           const { data: session } = await supabase.auth.getSession();
           if (session.session?.access_token) {
+            console.log('🔍 Fetching plan data...');
             const response = await fetch('/api/proxy/user/plan', {
               headers: {
                 'Authorization': `Bearer ${session.session.access_token}`,
                 'Content-Type': 'application/json',
               },
             });
+            console.log('📡 Plan API response:', response.status, response.statusText);
             if (response.ok) {
               const planData = await response.json();
+              console.log('📊 Plan data received:', planData);
               setUserPlan(planData);
+            } else {
+              const errorText = await response.text();
+              console.error('❌ Plan API error:', response.status, errorText);
             }
+          } else {
+            console.log('⚠️ No auth session for plan fetch');
           }
         } catch (error) {
-          console.log('Could not fetch plan data:', error);
+          console.error('🚨 Plan fetch failed:', error);
         }
       } else {
         setUser(null);
@@ -195,7 +203,7 @@ export function HoloHeader() {
             ROAST
           </span>
           
-          {/* Enhanced Plan Badge with Usage */}
+          {/* Enhanced Plan Badge with Smart Usage Display */}
           <div className={`px-2 py-0.5 text-[9px] font-medium rounded-full border flex items-center gap-1.5 ${
             userPlan?.plan === 'pro' ? 'text-orange-400 bg-orange-500/10 border-orange-500/30' :
             userPlan?.plan === 'business' ? 'text-purple-400 bg-purple-500/10 border-purple-500/30' :
@@ -210,15 +218,30 @@ export function HoloHeader() {
                 <span className="opacity-75">
                   {userPlan.uploads_used}/{userPlan.uploads_limit}
                 </span>
-                {/* Mini progress bar */}
-                <div className="w-3 h-1 bg-current/20 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-current rounded-full transition-all duration-300"
-                    style={{ 
-                      width: `${Math.min((userPlan.uploads_used / userPlan.uploads_limit) * 100, 100)}%` 
-                    }}
-                  />
-                </div>
+                {/* Smart progress indicator - boxes only for Free plan (≤5), smooth bar for others */}
+                {userPlan.uploads_limit <= 5 ? (
+                  // Individual boxes for small limits (Free plan)
+                  <div className="flex gap-0.5">
+                    {Array.from({ length: userPlan.uploads_limit }, (_, i) => (
+                      <div
+                        key={i}
+                        className={`w-1 h-2 rounded-sm ${
+                          i < userPlan.uploads_used ? 'bg-current' : 'bg-current opacity-20'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  // Smooth progress bar for higher plans
+                  <div className="w-4 h-1.5 bg-current/20 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-current rounded-full transition-all duration-300"
+                      style={{ 
+                        width: `${Math.min((userPlan.uploads_used / userPlan.uploads_limit) * 100, 100)}%` 
+                      }}
+                    />
+                  </div>
+                )}
               </>
             )}
             {userPlan && !userPlan.uploads_limit && (
