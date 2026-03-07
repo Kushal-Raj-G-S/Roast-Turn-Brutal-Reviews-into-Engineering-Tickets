@@ -152,9 +152,9 @@ def init_db(engine):
     """
     SQLModel.metadata.create_all(engine)
     
-    # Also ensure usage tracking table exists
-    from app.models.usage_models import UserMonthlyUsage
-    UserMonthlyUsage.metadata.create_all(engine)
+    # Note: user_monthly_usage table is created via SQL migration
+    # (backend/migrations/create_user_monthly_usage.sql)
+    # Don't auto-create it here - FK references profiles table which is in a different Base
 
 
 def get_session(engine):
