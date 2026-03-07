@@ -9,21 +9,17 @@
 
 -- Show counts before deletion (for confirmation)
 SELECT 'Before deletion:' as status;
-SELECT 'user_monthly_usage' as table_name, COUNT(*) as count FROM user_monthly_usage
+SELECT 'user_monthly_usage' as table_name, COUNT(*) as count FROM user_monthly_usage WHERE 1=1
 UNION ALL
-SELECT 'uploads', COUNT(*) FROM uploads
+SELECT 'uploads', COUNT(*) FROM uploads WHERE 1=1
 UNION ALL
-SELECT 'clusters', COUNT(*) FROM clusters
+SELECT 'clusters', COUNT(*) FROM clusters WHERE 1=1
 UNION ALL
-SELECT 'reviews', COUNT(*) FROM reviews
+SELECT 'reviews', COUNT(*) FROM reviews WHERE 1=1
 UNION ALL
-SELECT 'roast_results', COUNT(*) FROM roast_results
+SELECT 'user_statistics', COUNT(*) FROM user_statistics WHERE 1=1
 UNION ALL
-SELECT 'user_statistics', COUNT(*) FROM user_statistics
-UNION ALL
-SELECT 'severity_explanations', COUNT(*) FROM severity_explanations
-UNION ALL
-SELECT 'profiles (PRESERVED)', COUNT(*) FROM profiles;
+SELECT 'profiles (PRESERVED)', COUNT(*) FROM profiles WHERE 1=1;
 
 -- ================================================================
 -- DELETE ALL DATA (cascades will handle related records)
@@ -32,13 +28,10 @@ SELECT 'profiles (PRESERVED)', COUNT(*) FROM profiles;
 -- 1. Clear usage tracking (plan enforcement data)
 DELETE FROM user_monthly_usage;
 
--- 2. Clear severity explanations (won't cascade, safe to delete)
-DELETE FROM severity_explanations;
-
--- 3. Clear uploads (this will CASCADE to clusters, reviews, roast_results)
+-- 2. Clear uploads (this will CASCADE to clusters and reviews due to FK constraints)
 DELETE FROM uploads;
 
--- 4. Clear user_statistics (danglers if any)
+-- 3. Clear user_statistics (if any exist)
 DELETE FROM user_statistics;
 
 -- ================================================================
@@ -46,21 +39,17 @@ DELETE FROM user_statistics;
 -- ================================================================
 
 SELECT 'After deletion:' as status;
-SELECT 'user_monthly_usage' as table_name, COUNT(*) as count FROM user_monthly_usage
+SELECT 'user_monthly_usage' as table_name, COUNT(*) as count FROM user_monthly_usage WHERE 1=1
 UNION ALL
-SELECT 'uploads', COUNT(*) FROM uploads
+SELECT 'uploads', COUNT(*) FROM uploads WHERE 1=1
 UNION ALL
-SELECT 'clusters', COUNT(*) FROM clusters
+SELECT 'clusters', COUNT(*) FROM clusters WHERE 1=1
 UNION ALL
-SELECT 'reviews', COUNT(*) FROM reviews
+SELECT 'reviews', COUNT(*) FROM reviews WHERE 1=1
 UNION ALL
-SELECT 'roast_results', COUNT(*) FROM roast_results
+SELECT 'user_statistics', COUNT(*) FROM user_statistics WHERE 1=1
 UNION ALL
-SELECT 'user_statistics', COUNT(*) FROM user_statistics
-UNION ALL
-SELECT 'severity_explanations', COUNT(*) FROM severity_explanations
-UNION ALL
-SELECT 'profiles (PRESERVED)', COUNT(*) FROM profiles;
+SELECT 'profiles (PRESERVED)', COUNT(*) FROM profiles WHERE 1=1;
 
 -- ================================================================
 -- Reset sequences (optional - starts IDs from 1 again)
