@@ -33,6 +33,15 @@ interface UserProfile {
   provider: string | null;
 }
 
+interface UserPlan {
+  plan: string;
+  label: string;
+  uploads_used: number;
+  uploads_limit: number | null;
+  reviews_limit: number | null;
+  reset_date: string;
+}
+
 // ============================================================================
 // HOLO HEADER COMPONENT
 // ============================================================================
@@ -41,6 +50,7 @@ export function HoloHeader() {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [userPlan, setUserPlan] = useState<UserPlan | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -50,20 +60,47 @@ export function HoloHeader() {
       const { data: { user: authUser } } = await supabase.auth.getUser();
       
       if (authUser) {
-        // Fetch profile
+        // Fetch user profile
         const { data: profile } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', authUser.id)
           .single();
-
-        setUser(profile || {
-          id: authUser.id,
-          email: authUser.email!,
-          full_name: authUser.user_metadata?.full_name || null,
-          avatar_url: authUser.user_metadata?.avatar_url || null,
-          provider: authUser.app_metadata?.provider || null,
-        });
+        
+        if (profile) {
+          setUser(profile);
+        } else {
+          // Fallback to auth metadata
+          setUser({
+            id: authUser.id,
+            email: authUser.email!,
+            full_name: authUser.user_metadata?.full_name || null,
+            avatar_url: authUser.user_metadata?.avatar_url || null,
+            provider: authUser.app_metadata?.provider || null,
+          });
+        }
+        
+        // Fetch user plan from backend
+        try {
+          const { data: session } = await supabase.auth.getSession();
+          if (session.session?.access_token) {
+            const response = await fetch('/api/proxy/user/plan', {
+              headers: {
+                'Authorization': `Bearer ${session.session.access_token}`,
+                'Content-Type': 'application/json',
+              },
+            });
+            if (response.ok) {
+              const planData = await response.json();
+              setUserPlan(planData);
+            }
+          }
+        } catch (error) {
+          console.log('Could not fetch plan data:', error);
+        }
+      } else {
+        setUser(null);
+        setUserPlan(null);
       }
     };
 
@@ -158,9 +195,15 @@ export function HoloHeader() {
             ROAST
           </span>
           
-          {/* Version Badge */}
-          <span className="px-2 py-0.5 text-[10px] font-medium text-neutral-500 bg-neutral-900/50 rounded-full border border-white/5" style={{ fontFamily: 'var(--font-inter)' }}>
-            v0.2
+          {/* Plan Badge - replaces version badge */}
+          <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full border ${
+            userPlan?.plan === 'pro' ? 'text-orange-400 bg-orange-500/10 border-orange-500/30' :
+            userPlan?.plan === 'business' ? 'text-purple-400 bg-purple-500/10 border-purple-500/30' :
+            userPlan?.plan === 'enterprise' ? 'text-blue-400 bg-blue-500/10 border-blue-500/30' :
+            userPlan?.plan === 'starter' ? 'text-green-400 bg-green-500/10 border-green-500/30' :
+            'text-neutral-500 bg-neutral-900/50 border-white/5'
+          }`} style={{ fontFamily: 'var(--font-inter)' }}>
+            {userPlan?.label || 'Free'}
           </span>
         </Link>
 
