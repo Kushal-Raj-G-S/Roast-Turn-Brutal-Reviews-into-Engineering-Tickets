@@ -204,38 +204,40 @@ export function HoloHeader() {
           </span>
           
           {/* Enhanced Plan Badge with Smart Usage Display */}
-          <div className={`px-2 py-0.5 text-[9px] font-medium rounded-full border flex items-center gap-1.5 ${
-            userPlan?.plan === 'pro' ? 'text-orange-400 bg-orange-500/10 border-orange-500/30' :
-            userPlan?.plan === 'business' ? 'text-purple-400 bg-purple-500/10 border-purple-500/30' :
-            userPlan?.plan === 'enterprise' ? 'text-blue-400 bg-blue-500/10 border-blue-500/30' :
-            userPlan?.plan === 'starter' ? 'text-green-400 bg-green-500/10 border-green-500/30' :
-            'text-neutral-500 bg-neutral-900/50 border-white/5'
+          <div className={`px-2.5 py-1 text-[10px] font-semibold rounded-full border flex items-center gap-2 ${
+            userPlan?.plan === 'pro' ? 'text-orange-400 bg-orange-500/20 border-orange-500/50' :
+            userPlan?.plan === 'business' ? 'text-purple-400 bg-purple-500/20 border-purple-500/50' :
+            userPlan?.plan === 'enterprise' ? 'text-blue-400 bg-blue-500/20 border-blue-500/50' :
+            userPlan?.plan === 'starter' ? 'text-green-400 bg-green-500/20 border-green-500/50' :
+            'text-neutral-300 bg-neutral-800/80 border-neutral-700'
           }`} style={{ fontFamily: 'var(--font-inter)' }}>
-            <span className="font-bold">{userPlan?.label || 'Free'}</span>
+            <span className="uppercase tracking-wide">{userPlan?.label || 'Free'}</span>
             {userPlan && userPlan.uploads_limit && (
               <>
-                <div className="w-px h-2 bg-current opacity-30" />
-                <span className="opacity-75">
+                <div className="w-px h-3 bg-current opacity-40" />
+                <span className="font-bold">
                   {userPlan.uploads_used}/{userPlan.uploads_limit}
                 </span>
                 {/* Smart progress indicator - boxes only for Free plan (≤5), smooth bar for others */}
                 {userPlan.uploads_limit <= 5 ? (
-                  // Individual boxes for small limits (Free plan)
+                  // Individual boxes for small limits (Free plan) - BIGGER and MORE VISIBLE
                   <div className="flex gap-0.5">
                     {Array.from({ length: userPlan.uploads_limit }, (_, i) => (
                       <div
                         key={i}
-                        className={`w-1 h-2 rounded-sm ${
-                          i < userPlan.uploads_used ? 'bg-current' : 'bg-current opacity-20'
+                        className={`w-1.5 h-3 rounded-sm transition-all duration-200 ${
+                          i < userPlan.uploads_used 
+                            ? 'bg-current shadow-sm' 
+                            : 'bg-current/25 border border-current/30'
                         }`}
                       />
                     ))}
                   </div>
                 ) : (
-                  // Smooth progress bar for higher plans
-                  <div className="w-4 h-1.5 bg-current/20 rounded-full overflow-hidden">
+                  // Smooth progress bar for higher plans - THICKER and MORE VISIBLE
+                  <div className="w-6 h-2 bg-current/30 rounded-full overflow-hidden border border-current/40">
                     <div 
-                      className="h-full bg-current rounded-full transition-all duration-300"
+                      className="h-full bg-current rounded-full transition-all duration-300 shadow-sm"
                       style={{ 
                         width: `${Math.min((userPlan.uploads_used / userPlan.uploads_limit) * 100, 100)}%` 
                       }}
@@ -246,8 +248,8 @@ export function HoloHeader() {
             )}
             {userPlan && !userPlan.uploads_limit && (
               <>
-                <div className="w-px h-2 bg-current opacity-30" />
-                <span className="opacity-75">∞</span>
+                <div className="w-px h-3 bg-current opacity-40" />
+                <span className="font-bold text-lg">∞</span>
               </>
             )}
           </div>
