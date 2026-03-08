@@ -24,6 +24,9 @@ interface UploadResult {
     clusters_created: number;
     tickets_generated: number;
   };
+  isLimitError?: boolean;
+  errorCode?: string;
+  errorDetails?: any;
 }
 
 interface ProgressData {
@@ -124,9 +127,16 @@ export default function UploadPage() {
 
     } catch (error: any) {
       setIsUploading(false);
+      
+      // Check if it's a plan limit error (402)
+      const isLimitError = error.status === 402 || error.code === 'UPLOAD_LIMIT_REACHED' || error.code === 'REVIEW_LIMIT_EXCEEDED';
+      
       setResult({
         success: false,
         message: error.message || "Failed to upload file. Please try again.",
+        isLimitError,
+        errorCode: error.code,
+        errorDetails: error.details,
       });
     }
   };
@@ -281,26 +291,87 @@ export default function UploadPage() {
                 </>
               ) : (
                 <>
-                  <motion.div
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    transition={{ type: "spring", stiffness: 200, damping: 15 }}
-                    className="w-20 h-20 rounded-3xl bg-gradient-to-br from-red-500 to-pink-600 flex items-center justify-center mx-auto mb-6 shadow-lg shadow-red-500/30"
-                  >
-                    <AlertCircle className="w-10 h-10 text-white" />
-                  </motion.div>
+                  {/* Plan Limit Error - Special UI */}
+                  {result.isLimitError ? (
+                    <>
+                      <motion.div
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ type: "spring", stiffness: 200, damping: 15 }}
+                        className="w-20 h-20 rounded-3xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center mx-auto mb-6 shadow-lg shadow-amber-500/30"
+                      >
+                        <AlertCircle className="w-10 h-10 text-white" />
+                      </motion.div>
 
-                  <h2 className="text-2xl font-bold text-white mb-2">
-                    Upload Failed
-                  </h2>
-                  <p className="text-neutral-400 mb-8">{result.message}</p>
+                      <h2 className="text-2xl font-bold text-white mb-2">
+                        {result.errorCode === 'REVIEW_LIMIT_EXCEEDED' ? 'File Too Large' : 'Upload Limit Reached'}
+                      </h2>
+                      <p className="text-neutral-400 mb-6">{result.message}</p>
 
-                  <button
-                    onClick={resetUpload}
-                    className="px-6 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 text-white font-semibold hover:shadow-lg hover:shadow-orange-500/25 transition-all"
-                  >
-                    Try Again
-                  </button>
+                      {/* Limit Details */}
+                      {result.errorDetails && (
+                        <div className="max-w-md mx-auto mb-8 p-4 rounded-xl bg-neutral-900/50 border border-neutral-800">
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            {result.errorDetails.uploads_used !== undefined && (
+                              <>
+                                <div className="text-neutral-500">Used this month:</div>
+                                <div className="text-white font-semibold">{result.errorDetails.uploads_used}/{result.errorDetails.uploads_limit}</div>
+                              </>
+                            )}
+                            {result.errorDetails.row_count && (
+                              <>
+                                <div className="text-neutral-500">File rows:</div>
+                                <div className="text-white font-semibold">{result.errorDetails.row_count.toLocaleString()}</div>
+                                <div className="text-neutral-500">Plan limit:</div>
+                                <div className="text-white font-semibold">{result.errorDetails.reviews_limit.toLocaleString()}</div>
+                              </>
+                            )}
+                            <div className="text-neutral-500">Current plan:</div>
+                            <div className="text-orange-400 font-semibold capitalize">{result.errorDetails.plan}</div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-center gap-4">
+                        <Link
+                          href="/pricing"
+                          className="px-6 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 text-white font-semibold hover:shadow-lg hover:shadow-orange-500/25 transition-all"
+                        >
+                          Upgrade Plan
+                        </Link>
+                        <button
+                          onClick={resetUpload}
+                          className="px-6 py-3 rounded-xl border border-white/10 text-white font-semibold hover:bg-white/5 transition-colors"
+                        >
+                          Go Back
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    /* Generic Error */
+                    <>
+                      <motion.div
+                        initial={{ scale: 0 }}
+                        animate={{ scale: 1 }}
+                        transition={{ type: "spring", stiffness: 200, damping: 15 }}
+                        className="w-20 h-20 rounded-3xl bg-gradient-to-br from-red-500 to-pink-600 flex items-center justify-center mx-auto mb-6 shadow-lg shadow-red-500/30"
+                      >
+                        <AlertCircle className="w-10 h-10 text-white" />
+                      </motion.div>
+
+                      <h2 className="text-2xl font-bold text-white mb-2">
+                        Upload Failed
+                      </h2>
+                      <p className="text-neutral-400 mb-8">{result.message}</p>
+
+                      <button
+                        onClick={resetUpload}
+                        className="px-6 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 text-white font-semibold hover:shadow-lg hover:shadow-orange-500/25 transition-all"
+                      >
+                        Try Again
+                      </button>
+                    </>
+                  )}
                 </>
               )}
             </div>

@@ -244,8 +244,16 @@ class APIClient {
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || 'Upload failed');
+      const errorData = await response.json();
+      // For 402 errors, pass detailed error info
+      if (response.status === 402 && typeof errorData.detail === 'object') {
+        const err: any = new Error(errorData.detail.message || 'Upload limit reached');
+        err.code = errorData.detail.code;
+        err.details = errorData.detail;
+        err.status = 402;
+        throw err;
+      }
+      throw new Error(errorData.detail || 'Upload failed');
     }
 
     return response.json();
