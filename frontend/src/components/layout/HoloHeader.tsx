@@ -60,11 +60,12 @@ export function HoloHeader() {
   const pathname = usePathname();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [userPlan, setUserPlan] = useState<UserPlan | null>(null);
-  const [showDropdown, setShowDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState<Element[]>([]);
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const notificationRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -237,40 +238,9 @@ export function HoloHeader() {
     return date.toLocaleDateString();
   };
 
-  // Handle search - highlight text across page
+  // Handle search - highlight text across page with navigation
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      // Remove all highlights
-      document.querySelectorAll('.search-highlight').forEach(el => {
-        const parent = el.parentNode;
-        if (parent) {
-          parent.replaceChild(document.createTextNode(el.textContent || ''), el);
-          parent.normalize();
-        }
-      });
-      return;
-    }
-
-    // Simple text highlighting (can be enhanced with better algorithm)
-    const highlightText = (node: Node) => {
-      if (node.nodeType === Node.TEXT_NODE && node.textContent) {
-        const text = node.textContent;
-        const regex = new RegExp(`(${searchQuery})`, 'gi');
-        if (regex.test(text)) {
-          const span = document.createElement('span');
-          span.innerHTML = text.replace(regex, '<mark class="search-highlight bg-orange-500/30 text-orange-200 rounded px-0.5">$1</mark>');
-          node.parentNode?.replaceChild(span, node);
-        }
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        const element = node as Element;
-        // Skip script, style, and input elements
-        if (!['SCRIPT', 'STYLE', 'INPUT', 'TEXTAREA'].includes(element.tagName)) {
-          Array.from(node.childNodes).forEach(highlightText);
-        }
-      }
-    };
-
-    // Clear previous highlights
+    // Clear previous highlights and reset
     document.querySelectorAll('.search-highlight').forEach(el => {
       const parent = el.parentNode;
       if (parent) {
@@ -278,13 +248,84 @@ export function HoloHeader() {
         parent.normalize();
       }
     });
+    setSearchMatches([]);
+    setCurrentMatchIndex(0);
 
-    // Apply new highlights in main content area
+    if (!searchQuery.trim()) return;
+
+    // Highlight text and collect matches
+    const matches: Element[] = [];
+    const highlightText = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent) {
+        const text = node.textContent;
+        const regex = new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+        if (regex.test(text)) {
+          const span = document.createElement('span');
+          span.innerHTML = text.replace(regex, '<mark class="search-highlight bg-orange-500/30 text-orange-200 rounded px-0.5 transition-all duration-200">$1</mark>');
+          node.parentNode?.replaceChild(span, node);
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node as Element;
+        // Skip script, style, input, and header elements
+        if (!['SCRIPT', 'STYLE', 'INPUT', 'TEXTAREA', 'HEADER'].includes(element.tagName)) {
+          Array.from(node.childNodes).forEach(highlightText);
+        }
+      }
+    };
+
+    // Apply highlights in main content area
     const mainContent = document.querySelector('main');
     if (mainContent) {
       highlightText(mainContent);
+      
+      // Collect all highlight elements
+      const highlightElements = Array.from(document.querySelectorAll('.search-highlight'));
+      setSearchMatches(highlightElements);
+      
+      // Scroll to first match
+      if (highlightElements.length > 0) {
+        highlightElements[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+        highlightElements[0].classList.add('ring-2', 'ring-orange-500');
+      }
     }
   }, [searchQuery]);
+
+  // Navigate to next/previous match
+  const navigateMatch = (direction: 'next' | 'prev') => {
+    if (searchMatches.length === 0) return;
+
+    // Remove ring from current match
+    searchMatches[currentMatchIndex]?.classList.remove('ring-2', 'ring-orange-500');
+
+    // Calculate new index
+    let newIndex = currentMatchIndex;
+    if (direction === 'next') {
+      newIndex = (currentMatchIndex + 1) % searchMatches.length;
+    } else {
+      newIndex = currentMatchIndex === 0 ? searchMatches.length - 1 : currentMatchIndex - 1;
+    }
+
+    setCurrentMatchIndex(newIndex);
+
+    // Scroll to and highlight new match
+    if (searchMatches[newIndex]) {
+      searchMatches[newIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      searchMatches[newIndex].classList.add('ring-2', 'ring-orange-500');
+    }
+  };
+
+  // Keyboard shortcut for search navigation (Enter = next, Shift+Enter = prev)
+  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        navigateMatch('prev');
+      } else {
+        navigateMatch('next');
+      }
+    }
+  };
+
   return (
     <motion.header
       className="fixed top-4 left-24 right-6 z-40"
@@ -427,19 +468,52 @@ export function HoloHeader() {
                     <div className="flex items-center gap-2 mb-2">
                       <Search className="w-4 h-4 text-neutral-500" />
                       <h3 className="text-sm font-semibold text-white">Search</h3>
+                      {searchMatches.length > 0 && (
+                        <span className="ml-auto text-xs text-neutral-400">
+                          {currentMatchIndex + 1} of {searchMatches.length}
+                        </span>
+                      )}
                     </div>
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Type to highlight text..."
-                      className="w-full px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white placeholder-neutral-500 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/50 transition-all"
-                      autoFocus
-                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={handleSearchKeyDown}
+                        placeholder="Type to highlight text..."
+                        className="flex-1 px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white placeholder-neutral-500 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/50 transition-all"
+                        autoFocus
+                      />
+                      {searchMatches.length > 0 && (
+                        <div className="flex gap-1">
+                          <button
+                            onClick={() => navigateMatch('prev')}
+                            className="p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
+                            title="Previous match (Shift+Enter)"
+                          >
+                            <svg className="w-4 h-4 text-white rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => navigateMatch('next')}
+                            className="p-2 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
+                            title="Next match (Enter)"
+                          >
+                            <svg className="w-4 h-4 text-white -rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     {searchQuery && (
                       <div className="mt-3 p-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
                         <p className="text-xs text-orange-300">
-                          Highlighting &quot;{searchQuery}&quot; across the page
+                          {searchMatches.length === 0 
+                            ? `No matches found for "${searchQuery}"`
+                            : `Press Enter to navigate • ${searchMatches.length} match${searchMatches.length === 1 ? '' : 'es'} found`
+                          }
                         </p>
                       </div>
                     )}
