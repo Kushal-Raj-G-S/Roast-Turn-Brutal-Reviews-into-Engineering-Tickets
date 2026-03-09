@@ -537,7 +537,6 @@ export function HoloHeader() {
               )}
             </AnimatePresence>
           </div>
-          </motion.button>
           
           {/* Separator */}
           <div className="w-px h-6 bg-white/10" />
