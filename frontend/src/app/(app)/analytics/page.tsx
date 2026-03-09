@@ -28,6 +28,8 @@ import {
   Zap,
   RotateCcw,
   Loader2,
+  Download,
+  FileSpreadsheet,
 } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
@@ -136,6 +138,213 @@ export default function AnalyticsPage() {
     }
     setExportCluster(cluster);
   }, [clusterDetails]);
+
+  // ── CSV Export ────────────────────────────────────────────────────────────────
+  const exportToCSV = useCallback(() => {
+    if (!analytics) return;
+
+    const { user_statistics, severity_distribution, clusters, upload_data } = analytics;
+    
+    // Create CSV content
+    let csvContent = "data:text/csv;charset=utf-8,";
+    
+    // Header
+    csvContent += `Analytics Report${uploadId ? ` - ${upload_data?.filename || `Upload #${uploadId}`}` : ''}\n`;
+    csvContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+    
+    // Overview Stats
+    csvContent += "OVERVIEW\n";
+    csvContent += "Metric,Value\n";
+    csvContent += `Total Reviews Analyzed,${user_statistics.total_reviews_analyzed}\n`;
+    csvContent += `Total Issues Found,${user_statistics.total_issues_found}\n`;
+    csvContent += `Issues Resolved,${user_statistics.total_issues_resolved}\n`;
+    if (upload_data?.processing_time_seconds) {
+      csvContent += `Processing Time (seconds),${upload_data.processing_time_seconds}\n`;
+    }
+    csvContent += "\n";
+    
+    // Severity Distribution
+    csvContent += "SEVERITY DISTRIBUTION\n";
+    csvContent += "Severity,Count\n";
+    csvContent += `Critical,${severity_distribution.critical}\n`;
+    csvContent += `High,${severity_distribution.high}\n`;
+    csvContent += `Medium,${severity_distribution.medium}\n`;
+    csvContent += `Low,${severity_distribution.low}\n`;
+    csvContent += "\n";
+    
+    // Clusters/Issues
+    if (clusters && clusters.length > 0) {
+      csvContent += "ISSUES/CLUSTERS\n";
+      csvContent += "Title,Severity,Status,Review Count,Created Date,Regression\n";
+      clusters.forEach(cluster => {
+        const title = `"${cluster.title.replace(/"/g, '""')}"`;
+        const regression = cluster.regression_detected ? `Yes - ${cluster.regression_of_title}` : 'No';
+        csvContent += `${title},${cluster.severity},${cluster.status},${cluster.review_count},${new Date(cluster.created_at).toLocaleDateString()},${regression}\n`;
+      });
+    }
+    
+    // Download
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `analytics-report-${uploadId || 'all'}-${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [analytics, uploadId]);
+
+  // ── PDF Export ────────────────────────────────────────────────────────────────
+  const exportToPDF = useCallback(() => {
+    if (!analytics) return;
+
+    const { user_statistics, severity_distribution, clusters, upload_data } = analytics;
+    
+    // Create a printable HTML page
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) return;
+    
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Analytics Report${uploadId ? ` - ${upload_data?.filename || `Upload #${uploadId}`}` : ''}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 40px;
+      background: white;
+      color: #1a1a1a;
+    }
+    h1 { font-size: 28px; margin-bottom: 8px; color: #ff5500; }
+    h2 { font-size: 20px; margin-top: 32px; margin-bottom: 16px; color: #333; border-bottom: 2px solid #ff5500; padding-bottom: 8px; }
+    .subtitle { color: #666; font-size: 14px; margin-bottom: 32px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 32px; }
+    .stat-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; }
+    .stat-label { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-value { font-size: 32px; font-weight: bold; color: #ff5500; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e0e0e0; }
+    th { background: #f5f5f5; font-weight: 600; color: #333; }
+    .severity-critical { color: #dc2626; font-weight: 600; }
+    .severity-high { color: #ea580c; font-weight: 600; }
+    .severity-medium { color: #ca8a04; font-weight: 600; }
+    .severity-low { color: #0891b2; font-weight: 600; }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+    .badge-regression { background: #fef3c7; color: #92400e; }
+    @media print {
+      body { padding: 20px; }
+      .no-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <h1>📊 Analytics Report</h1>
+  <p class="subtitle">
+    ${uploadId ? `Upload: ${upload_data?.filename || `#${uploadId}`} | ` : ''}
+    Generated: ${new Date().toLocaleString()}
+  </p>
+
+  <h2>Overview</h2>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Total Reviews</div>
+      <div class="stat-value">${user_statistics.total_reviews_analyzed.toLocaleString()}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Issues Found</div>
+      <div class="stat-value">${user_statistics.total_issues_found}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Issues Resolved</div>
+      <div class="stat-value">${user_statistics.total_issues_resolved}</div>
+    </div>
+    ${upload_data?.processing_time_seconds ? `
+    <div class="stat-card">
+      <div class="stat-label">Processing Time</div>
+      <div class="stat-value">${upload_data.processing_time_seconds}s</div>
+    </div>
+    ` : ''}
+  </div>
+
+  <h2>Severity Distribution</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Severity</th>
+        <th>Count</th>
+        <th>Percentage</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="severity-critical">Critical</td>
+        <td>${severity_distribution.critical}</td>
+        <td>${user_statistics.total_issues_found ? Math.round((severity_distribution.critical / user_statistics.total_issues_found) * 100) : 0}%</td>
+      </tr>
+      <tr>
+        <td class="severity-high">High</td>
+        <td>${severity_distribution.high}</td>
+        <td>${user_statistics.total_issues_found ? Math.round((severity_distribution.high / user_statistics.total_issues_found) * 100) : 0}%</td>
+      </tr>
+      <tr>
+        <td class="severity-medium">Medium</td>
+        <td>${severity_distribution.medium}</td>
+        <td>${user_statistics.total_issues_found ? Math.round((severity_distribution.medium / user_statistics.total_issues_found) * 100) : 0}%</td>
+      </tr>
+      <tr>
+        <td class="severity-low">Low</td>
+        <td>${severity_distribution.low}</td>
+        <td>${user_statistics.total_issues_found ? Math.round((severity_distribution.low / user_statistics.total_issues_found) * 100) : 0}%</td>
+      </tr>
+    </tbody>
+  </table>
+
+  ${clusters && clusters.length > 0 ? `
+  <h2>Issues & Clusters</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Severity</th>
+        <th>Reviews</th>
+        <th>Status</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${clusters.map(cluster => `
+        <tr>
+          <td>
+            ${cluster.title}
+            ${cluster.regression_detected ? '<span class="badge badge-regression">REGRESSION</span>' : ''}
+          </td>
+          <td class="severity-${cluster.severity}">${cluster.severity}</td>
+          <td>${cluster.review_count}</td>
+          <td>${cluster.status.replace(/_/g, ' ')}</td>
+          <td>${new Date(cluster.created_at).toLocaleDateString()}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+  ` : ''}
+
+  <div class="no-print" style="margin-top: 40px; text-align: center;">
+    <button onclick="window.print()" style="padding: 12px 24px; background: #ff5500; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+      Print / Save as PDF
+    </button>
+    <button onclick="window.close()" style="margin-left: 12px; padding: 12px 24px; background: #666; color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;">
+      Close
+    </button>
+  </div>
+</body>
+</html>
+    `;
+    
+    printWindow.document.write(html);
+    printWindow.document.close();
+  }, [analytics, uploadId]);
 
   useEffect(() => {
     fetchAnalytics();
@@ -364,6 +573,29 @@ export default function AnalyticsPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {/* Export Buttons */}
+            <motion.button
+              onClick={exportToCSV}
+              disabled={!analytics}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-green-500/20 border border-emerald-500/30 hover:border-emerald-500/50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+              whileHover={{ scale: analytics ? 1.02 : 1 }}
+              whileTap={{ scale: analytics ? 0.98 : 1 }}
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400 group-hover:text-emerald-300 transition-colors" />
+              <span className="text-sm font-semibold text-white">Export CSV</span>
+            </motion.button>
+
+            <motion.button
+              onClick={exportToPDF}
+              disabled={!analytics}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-500/20 to-indigo-500/20 border border-blue-500/30 hover:border-blue-500/50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+              whileHover={{ scale: analytics ? 1.02 : 1 }}
+              whileTap={{ scale: analytics ? 0.98 : 1 }}
+            >
+              <Download className="w-4 h-4 text-blue-400 group-hover:text-blue-300 transition-colors" />
+              <span className="text-sm font-semibold text-white">Export PDF</span>
+            </motion.button>
+
             {/* AI Debug Center Button */}
             <motion.button
               onClick={() => router.push(uploadId ? `/ai-debug?upload_id=${uploadId}` : '/ai-debug')}
