@@ -60,6 +60,7 @@ export function HoloHeader() {
   const pathname = usePathname();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [userPlan, setUserPlan] = useState<UserPlan | null>(null);
+  const [showDropdown, setShowDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
