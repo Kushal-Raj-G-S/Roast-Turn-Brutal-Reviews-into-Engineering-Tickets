@@ -54,3 +54,13 @@ Thumbs.db
 # Test files
 test_*.csv
 *_test.csv
+
+# Test results and shadow data
+shadow_results_production/
+test_results/
+
+# Uploads directory
+uploads/
+
+# Training data
+data/training*/

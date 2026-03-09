@@ -1,5 +1,0 @@
-Email notifications when uploads complete (using Supabase edge functions)
-business - API key management - Let users generate API keys for programmatic uploads
-Historical trends - Chart showing issues over time across multiple uploads
-Custom alerting - Set up alerts for specific keywords/patterns
-Data retention policies - Auto-delete old uploads based on plan

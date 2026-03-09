@@ -106,8 +106,16 @@ interface DockItemProps {
 }
 
 function DockItem({ item, isActive, isHovered, onHover, onClick }: DockItemProps) {
+  const handleClick = (e: React.MouseEvent) => {
+    if (item.id === 'clusters') {
+      e.preventDefault();
+      window.location.href = '/clusters';
+    }
+    onClick();
+  };
+
   return (
-    <Link href={item.href} onClick={onClick}>
+    <Link href={item.href} onClick={handleClick}>
       <motion.div
         className="relative flex items-center justify-center w-12 h-12 rounded-xl cursor-pointer group"
         onMouseEnter={() => onHover(item.id)}

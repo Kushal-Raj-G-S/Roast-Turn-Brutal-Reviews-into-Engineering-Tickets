@@ -1,0 +1,40 @@
+name: Shadow Upload Cleanup
+
+on:
+  schedule:
+    # Runs at 2 AM UTC every Sunday
+    - cron: '0 2 * * 0'
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install sqlalchemy psycopg2-binary python-dotenv
+      
+      - name: Run shadow upload cleanup
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          cd backend
+          python cleanup_shadow_uploads.py
+      
+      - name: Log completion
+        if: success()
+        run: echo "✅ Shadow cleanup completed successfully at $(date)"
+      
+      - name: Log failure
+        if: failure()
+        run: echo "❌ Shadow cleanup failed at $(date)"

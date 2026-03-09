@@ -1,1 +1,0 @@
-cd "e:\BMSIT\Personal Ai projects\1 Internship-Resume Projects\5_Roast_google_reviews\backend" ; .\venv\Scripts\Activate.ps1 ; uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
