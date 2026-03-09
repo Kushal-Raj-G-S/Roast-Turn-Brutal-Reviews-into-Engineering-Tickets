@@ -139,11 +139,23 @@ export default function AnalyticsPage() {
     setExportCluster(cluster);
   }, [clusterDetails]);
 
-  // ── CSV Export ────────────────────────────────────────────────────────────────
-  const exportToCSV = useCallback(() => {
+  // ── CSV Export with AI Debug Info ────────────────────────────────────────────
+  const exportToCSV = useCallback(async () => {
     if (!analytics) return;
 
     const { user_statistics, severity_distribution, clusters, upload_data } = analytics;
+    
+    // Fetch full cluster details if needed
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    
+    apiClient.setToken(session.access_token);
+    
+    // Fetch details for all clusters
+    const clusterDetailsPromises = (clusters || []).map(c => 
+      apiClient.getCluster(c.id).catch(() => null)
+    );
+    const clusterDetailsList = await Promise.all(clusterDetailsPromises);
     
     // Create CSV content
     let csvContent = "data:text/csv;charset=utf-8,";
@@ -172,14 +184,21 @@ export default function AnalyticsPage() {
     csvContent += `Low,${severity_distribution.low}\n`;
     csvContent += "\n";
     
-    // Clusters/Issues
+    // Clusters/Issues with AI Debug Info
     if (clusters && clusters.length > 0) {
-      csvContent += "ISSUES/CLUSTERS\n";
-      csvContent += "Title,Severity,Status,Review Count,Created Date,Regression\n";
-      clusters.forEach(cluster => {
+      csvContent += "ISSUES/CLUSTERS DETAIL\n";
+      csvContent += "Title,Severity,Status,Review Count,Regression,RCA Hypothesis,Affected Versions,Affected Devices,Keywords,Sample Reviews (Top 3)\n";
+      clusters.forEach((cluster, idx) => {
+        const details = clusterDetailsList[idx];
         const title = `"${cluster.title.replace(/"/g, '""')}"`;
         const regression = cluster.regression_detected ? `Yes - ${cluster.regression_of_title}` : 'No';
-        csvContent += `${title},${cluster.severity},${cluster.status},${cluster.review_count},${new Date(cluster.created_at).toLocaleDateString()},${regression}\n`;
+        const rca = details?.rca_hypothesis ? `"${details.rca_hypothesis.replace(/"/g, '""')}"` : 'N/A';
+        const versions = details?.affected_versions?.join('; ') || 'N/A';
+        const devices = details?.affected_devices?.join('; ') || 'N/A';
+        const keywords = details?.keywords?.join('; ') || 'N/A';
+        const samples = details?.sample_reviews?.slice(0, 3).map(r => r.content.substring(0, 100)).join(' | ') || 'N/A';
+        const samplesCleaned = `"${samples.replace(/"/g, '""').replace(/\n/g, ' ')}"`;
+        csvContent += `${title},${cluster.severity},${cluster.status},${cluster.review_count},${regression},${rca},${versions},${devices},${keywords},${samplesCleaned}\n`;
       });
     }
     
@@ -193,11 +212,23 @@ export default function AnalyticsPage() {
     document.body.removeChild(link);
   }, [analytics, uploadId]);
 
-  // ── PDF Export ────────────────────────────────────────────────────────────────
-  const exportToPDF = useCallback(() => {
+  // ── PDF Export with AI Debug Info ────────────────────────────────────────────
+  const exportToPDF = useCallback(async () => {
     if (!analytics) return;
 
     const { user_statistics, severity_distribution, clusters, upload_data } = analytics;
+    
+    // Fetch full cluster details if needed
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    
+    apiClient.setToken(session.access_token);
+    
+    // Fetch details for all clusters
+    const clusterDetailsPromises = (clusters || []).map(c => 
+      apiClient.getCluster(c.id).catch(() => null)
+    );
+    const clusterDetailsList = await Promise.all(clusterDetailsPromises);
     
     // Create a printable HTML page
     const printWindow = window.open('', '_blank');
@@ -216,23 +247,33 @@ export default function AnalyticsPage() {
       padding: 40px;
       background: white;
       color: #1a1a1a;
+      font-size: 12px;
     }
     h1 { font-size: 28px; margin-bottom: 8px; color: #ff5500; }
     h2 { font-size: 20px; margin-top: 32px; margin-bottom: 16px; color: #333; border-bottom: 2px solid #ff5500; padding-bottom: 8px; }
+    h3 { font-size: 16px; margin-top: 20px; margin-bottom: 12px; color: #444; }
     .subtitle { color: #666; font-size: 14px; margin-bottom: 32px; }
     .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 32px; }
     .stat-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 16px; }
     .stat-label { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
     .stat-value { font-size: 32px; font-weight: bold; color: #ff5500; margin-top: 8px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
-    th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e0e0e0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 11px; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
     th { background: #f5f5f5; font-weight: 600; color: #333; }
     .severity-critical { color: #dc2626; font-weight: 600; }
     .severity-high { color: #ea580c; font-weight: 600; }
     .severity-medium { color: #ca8a04; font-weight: 600; }
     .severity-low { color: #0891b2; font-weight: 600; }
-    .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; margin-left: 8px; }
     .badge-regression { background: #fef3c7; color: #92400e; }
+    .cluster-detail { margin-bottom: 24px; padding: 16px; border: 1px solid #e0e0e0; border-radius: 8px; page-break-inside: avoid; }
+    .cluster-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 12px; }
+    .detail-section { margin-bottom: 12px; }
+    .detail-label { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .detail-value { color: #333; line-height: 1.6; }
+    .detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+    .tag { display: inline-block; padding: 4px 8px; background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 4px; font-size: 10px; }
+    .sample-review { padding: 8px; background: #f9fafb; border-left: 3px solid #ff5500; margin-bottom: 8px; font-style: italic; color: #555; }
     @media print {
       body { padding: 20px; }
       .no-print { display: none; }
@@ -240,7 +281,7 @@ export default function AnalyticsPage() {
   </style>
 </head>
 <body>
-  <h1>📊 Analytics Report</h1>
+  <h1>📊 Analytics Report with AI Debug Info</h1>
   <p class="subtitle">
     ${uploadId ? `Upload: ${upload_data?.filename || `#${uploadId}`} | ` : ''}
     Generated: ${new Date().toLocaleString()}
@@ -302,32 +343,80 @@ export default function AnalyticsPage() {
   </table>
 
   ${clusters && clusters.length > 0 ? `
-  <h2>Issues & Clusters</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Title</th>
-        <th>Severity</th>
-        <th>Reviews</th>
-        <th>Status</th>
-        <th>Date</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${clusters.map(cluster => `
-        <tr>
-          <td>
-            ${cluster.title}
-            ${cluster.regression_detected ? '<span class="badge badge-regression">REGRESSION</span>' : ''}
-          </td>
-          <td class="severity-${cluster.severity}">${cluster.severity}</td>
-          <td>${cluster.review_count}</td>
-          <td>${cluster.status.replace(/_/g, ' ')}</td>
-          <td>${new Date(cluster.created_at).toLocaleDateString()}</td>
-        </tr>
-      `).join('')}
-    </tbody>
-  </table>
+  <h2>Detailed Issues & Clusters with AI Debug Info</h2>
+  ${clusters.map((cluster, idx) => {
+    const details = clusterDetailsList[idx];
+    return `
+      <div class="cluster-detail">
+        <div class="cluster-title">
+          <span class="severity-${cluster.severity}">${cluster.severity.toUpperCase()}</span> | 
+          ${cluster.title}
+          ${cluster.regression_detected ? '<span class="badge badge-regression">REGRESSION</span>' : ''}
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px;">
+          <div>
+            <div class="detail-label">Status</div>
+            <div class="detail-value">${cluster.status.replace(/_/g, ' ')}</div>
+          </div>
+          <div>
+            <div class="detail-label">Review Count</div>
+            <div class="detail-value">${cluster.review_count} reviews</div>
+          </div>
+          <div>
+            <div class="detail-label">Detected</div>
+            <div class="detail-value">${new Date(cluster.created_at).toLocaleDateString()}</div>
+          </div>
+        </div>
+
+        ${details?.rca_hypothesis ? `
+        <div class="detail-section">
+          <div class="detail-label">🔍 Root Cause Analysis (RCA)</div>
+          <div class="detail-value">${details.rca_hypothesis}</div>
+        </div>
+        ` : ''}
+
+        ${details?.affected_versions && details.affected_versions.length > 0 ? `
+        <div class="detail-section">
+          <div class="detail-label">📱 Affected Versions</div>
+          <div class="detail-tags">
+            ${details.affected_versions.map(v => `<span class="tag">${v}</span>`).join('')}
+          </div>
+        </div>
+        ` : ''}
+
+        ${details?.affected_devices && details.affected_devices.length > 0 ? `
+        <div class="detail-section">
+          <div class="detail-label">💻 Affected Devices</div>
+          <div class="detail-tags">
+            ${details.affected_devices.map(d => `<span class="tag">${d}</span>`).join('')}
+          </div>
+        </div>
+        ` : ''}
+
+        ${details?.keywords && details.keywords.length > 0 ? `
+        <div class="detail-section">
+          <div class="detail-label">🏷️ Keywords</div>
+          <div class="detail-tags">
+            ${details.keywords.slice(0, 8).map(k => `<span class="tag">${k}</span>`).join('')}
+          </div>
+        </div>
+        ` : ''}
+
+        ${details?.sample_reviews && details.sample_reviews.length > 0 ? `
+        <div class="detail-section">
+          <div class="detail-label">💬 Sample Reviews (Top 3)</div>
+          ${details.sample_reviews.slice(0, 3).map(review => `
+            <div class="sample-review">
+              "${review.content.substring(0, 200)}${review.content.length > 200 ? '...' : ''}"
+              ${review.rating ? ` — ⭐ ${review.rating}/5` : ''}
+            </div>
+          `).join('')}
+        </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('')}
   ` : ''}
 
   <div class="no-print" style="margin-top: 40px; text-align: center;">
