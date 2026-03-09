@@ -19,7 +19,7 @@ import Image from "next/image";
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useRouter, usePathname } from "next/navigation";
-import { LogOut, User, Settings } from "lucide-react";
+import { LogOut, User, Settings, Bell, Search, FileText, Clock } from "lucide-react";
 
 // ============================================================================
 // TYPES
@@ -42,6 +42,15 @@ interface UserPlan {
   reset_date: string;
 }
 
+interface Notification {
+  id: number;
+  filename: string;
+  status: string;
+  created_at: string;
+  total_reviews: number;
+  clusters_created: number;
+}
+
 // ============================================================================
 // HOLO HEADER COMPONENT
 // ============================================================================
@@ -52,7 +61,13 @@ export function HoloHeader() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [userPlan, setUserPlan] = useState<UserPlan | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const notificationRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Get current user
@@ -115,19 +130,62 @@ export function HoloHeader() {
     getUser();
   }, []);
 
-  // Close dropdown when clicking outside
+  // Fetch notifications (completed uploads)
+  useEffect(() => {
+    const fetchNotifications = async () => {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (!authUser) return;
+
+      const { data } = await supabase
+        .from('uploads')
+        .select('id, filename, status, created_at, total_reviews, clusters_created')
+        .eq('user_id', authUser.id)
+        .eq('status', 'completed')
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      if (data) {
+        setNotifications(data);
+      }
+    };
+
+    fetchNotifications();
+
+    // Subscribe to new uploads
+    const channel = supabase
+      .channel('uploads-changes')
+      .on('postgres_changes', 
+        { event: 'INSERT', schema: 'public', table: 'uploads' },
+        () => fetchNotifications()
+      )
+      .on('postgres_changes', 
+        { event: 'UPDATE', schema: 'public', table: 'uploads' },
+        () => fetchNotifications()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Close dropdowns when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setShowDropdown(false);
       }
+      if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
+        setShowNotifications(false);
+      }
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setShowSearch(false);
+      }
     };
 
-    if (showDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [showDropdown]);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleSignOut = async () => {
     await fetch('/api/auth/signout', { method: 'POST' });
@@ -162,6 +220,71 @@ export function HoloHeader() {
     if (user?.full_name) return user.full_name.split(' ')[0];
     return user?.email?.split('@')[0] || 'User';
   };
+
+  // Format relative time for notifications
+  const getRelativeTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  };
+
+  // Handle search - highlight text across page
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      // Remove all highlights
+      document.querySelectorAll('.search-highlight').forEach(el => {
+        const parent = el.parentNode;
+        if (parent) {
+          parent.replaceChild(document.createTextNode(el.textContent || ''), el);
+          parent.normalize();
+        }
+      });
+      return;
+    }
+
+    // Simple text highlighting (can be enhanced with better algorithm)
+    const highlightText = (node: Node) => {
+      if (node.nodeType === Node.TEXT_NODE && node.textContent) {
+        const text = node.textContent;
+        const regex = new RegExp(`(${searchQuery})`, 'gi');
+        if (regex.test(text)) {
+          const span = document.createElement('span');
+          span.innerHTML = text.replace(regex, '<mark class="search-highlight bg-orange-500/30 text-orange-200 rounded px-0.5">$1</mark>');
+          node.parentNode?.replaceChild(span, node);
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node as Element;
+        // Skip script, style, and input elements
+        if (!['SCRIPT', 'STYLE', 'INPUT', 'TEXTAREA'].includes(element.tagName)) {
+          Array.from(node.childNodes).forEach(highlightText);
+        }
+      }
+    };
+
+    // Clear previous highlights
+    document.querySelectorAll('.search-highlight').forEach(el => {
+      const parent = el.parentNode;
+      if (parent) {
+        parent.replaceChild(document.createTextNode(el.textContent || ''), el);
+        parent.normalize();
+      }
+    });
+
+    // Apply new highlights in main content area
+    const mainContent = document.querySelector('main');
+    if (mainContent) {
+      highlightText(mainContent);
+    }
+  }, [searchQuery]);
   return (
     <motion.header
       className="fixed top-4 left-24 right-6 z-40"
@@ -274,30 +397,146 @@ export function HoloHeader() {
 
         {/* Right: Actions */}
         <div className="flex items-center gap-3">
-          {/* Search Button */}
-          <motion.button
-            className="p-2 rounded-lg text-neutral-500 hover:text-white hover:bg-white/5 transition-colors"
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-            </svg>
-          </motion.button>
+          {/* Search Button with Dropdown */}
+          <div className="relative" ref={searchRef}>
+            <motion.button
+              onClick={() => setShowSearch(!showSearch)}
+              className={`p-2 rounded-lg transition-colors ${
+                showSearch ? 'text-orange-400 bg-orange-500/10' : 'text-neutral-500 hover:text-white hover:bg-white/5'
+              }`}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <Search className="w-5 h-5" />
+            </motion.button>
+
+            {/* Search Dropdown */}
+            <AnimatePresence>
+              {showSearch && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute right-0 mt-2 w-80 rounded-2xl backdrop-blur-xl bg-black/90 border border-white/10 shadow-2xl overflow-hidden z-50"
+                  style={{
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 0 rgba(255, 255, 255, 0.05)'
+                  }}
+                >
+                  <div className="p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Search className="w-4 h-4 text-neutral-500" />
+                      <h3 className="text-sm font-semibold text-white">Search</h3>
+                    </div>
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Type to highlight text..."
+                      className="w-full px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white placeholder-neutral-500 focus:outline-none focus:border-orange-500/50 focus:ring-1 focus:ring-orange-500/50 transition-all"
+                      autoFocus
+                    />
+                    {searchQuery && (
+                      <div className="mt-3 p-2 rounded-lg bg-orange-500/10 border border-orange-500/20">
+                        <p className="text-xs text-orange-300">
+                          Highlighting &quot;{searchQuery}&quot; across the page
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
           
-          {/* Notifications */}
-          <motion.button
-            className="relative p-2 rounded-lg text-neutral-500 hover:text-white hover:bg-white/5 transition-colors"
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
-            </svg>
-            {/* Notification dot */}
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-orange-500" 
-              style={{ boxShadow: "0 0 6px rgba(255, 85, 0, 0.8)" }}
-            />
+          {/* Notifications with Dropdown */}
+          <div className="relative" ref={notificationRef}>
+            <motion.button
+              onClick={() => setShowNotifications(!showNotifications)}
+              className={`relative p-2 rounded-lg transition-colors ${
+                showNotifications ? 'text-orange-400 bg-orange-500/10' : 'text-neutral-500 hover:text-white hover:bg-white/5'
+              }`}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <Bell className="w-5 h-5" />
+              {/* Notification dot */}
+              {notifications.length > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-orange-500" 
+                  style={{ boxShadow: "0 0 6px rgba(255, 85, 0, 0.8)" }}
+                />
+              )}
+            </motion.button>
+
+            {/* Notifications Dropdown */}
+            <AnimatePresence>
+              {showNotifications && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute right-0 mt-2 w-96 rounded-2xl backdrop-blur-xl bg-black/90 border border-white/10 shadow-2xl overflow-hidden z-50 max-h-[500px] overflow-y-auto"
+                  style={{
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 0 rgba(255, 255, 255, 0.05)'
+                  }}
+                >
+                  {/* Header */}
+                  <div className="p-4 border-b border-white/5 sticky top-0 bg-black/90 backdrop-blur-xl">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Bell className="w-4 h-4 text-neutral-400" />
+                        <h3 className="text-sm font-semibold text-white">Notifications</h3>
+                      </div>
+                      {notifications.length > 0 && (
+                        <span className="text-xs text-neutral-500">{notifications.length} total</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Notifications List */}
+                  <div className="p-2">
+                    {notifications.length === 0 ? (
+                      <div className="p-8 text-center">
+                        <Bell className="w-12 h-12 text-neutral-700 mx-auto mb-3" />
+                        <p className="text-sm text-neutral-500">No notifications yet</p>
+                        <p className="text-xs text-neutral-600 mt-1">Your completed uploads will appear here</p>
+                      </div>
+                    ) : (
+                      notifications.map((notif) => (
+                        <Link
+                          key={notif.id}
+                          href={`/analytics?upload_id=${notif.id}`}
+                          onClick={() => setShowNotifications(false)}
+                          className="block p-3 rounded-lg hover:bg-white/5 transition-colors mb-1"
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="w-10 h-10 rounded-lg bg-green-500/20 border border-green-500/30 flex items-center justify-center flex-shrink-0">
+                              <FileText className="w-5 h-5 text-green-400" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-white truncate mb-1">
+                                {notif.filename}
+                              </p>
+                              <div className="flex items-center gap-3 text-xs text-neutral-400">
+                                <span>{notif.total_reviews?.toLocaleString()} reviews</span>
+                                <span>•</span>
+                                <span>{notif.clusters_created} clusters</span>
+                              </div>
+                              <div className="flex items-center gap-1 mt-1 text-xs text-neutral-500">
+                                <Clock className="w-3 h-3" />
+                                <span>{getRelativeTime(notif.created_at)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </Link>
+                      ))
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
           </motion.button>
           
           {/* Separator */}
