@@ -13,9 +13,12 @@ const pricingTiers = [
     description: "Perfect for testing and small projects",
     features: [
       "5 uploads / month",
-      "Up to 10,000 reviews per file",
+      "Up to 20,000 reviews per file",
       "AI cluster analysis",
       "Sentiment & severity scoring",
+      "Real-time notifications",
+      "Global search & navigation",
+      "Manual data management",
       "CSV export",
       "Basic analytics dashboard",
       "Community support",
@@ -31,9 +34,12 @@ const pricingTiers = [
     description: "For solo devs and indie makers",
     features: [
       "10 uploads / month",
-      "Up to 10,000 reviews per file",
+      "Up to 50,000 reviews per file",
       "AI cluster analysis",
       "Sentiment & severity scoring",
+      "Real-time notifications",
+      "Global search & navigation",
+      "Manual data management",
       "CSV export",
       "Full analytics dashboard",
       "Email support",
@@ -53,7 +59,10 @@ const pricingTiers = [
       "Advanced cluster insights",
       "Priority & noise filtering",
       "AI Debug Center access",
-      "Data export (CSV / JSON)",
+      "Real-time notifications",
+      "Global search & navigation",
+      "Manual data management",
+      "Enhanced CSV/PDF export (with AI Debug info)",
       "Upload history & archive",
       "Email support",
     ],
@@ -73,6 +82,7 @@ const pricingTiers = [
       "Dedicated processing priority",
       "API access",
       "Custom cluster models",
+      "Advanced export formats",
       "Team collaboration tools",
       "Priority support (24/7)",
       "SLA guarantees",
@@ -151,7 +161,12 @@ const faqs = [
   {
     question: "What is the AI Debug Center?",
     answer:
-      "The AI Debug Center (Pro+) gives you per-cluster root cause analysis, suggested fixes and code-level hints, severity reasoning, and exportable GitHub issue templates.",
+      "The AI Debug Center (Pro+) gives you per-cluster root cause analysis, suggested fixes and code-level hints, severity reasoning, and exportable GitHub issue templates. Pro+ users also get enhanced CSV/PDF exports with full AI insights including RCA hypotheses, affected versions/devices, keywords, and sample reviews.",
+  },
+  {
+    question: "What features are included for free users?",
+    answer:
+      "All users (including free) get real-time notifications when uploads complete, global search with text highlighting and navigation, manual data management to delete old uploads, and basic CSV exports. Paid plans unlock higher limits and advanced features like AI Debug insights.",
   },
   {
     question: "Is my data private?",

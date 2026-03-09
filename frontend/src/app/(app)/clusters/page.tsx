@@ -17,7 +17,8 @@ import {
   CheckCircle2,
   ChevronRight,
   Database,
-  Flame
+  Flame,
+  Trash2
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -45,10 +46,36 @@ export default function ClustersPage() {
   const router = useRouter();
   const [uploads, setUploads] = useState<UploadHistory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchUploadHistory();
   }, []);
+
+  const handleDelete = async (uploadId: number, filename: string) => {
+    if (!confirm(`Are you sure you want to delete "${filename}"?\n\nThis will permanently remove:\n- The upload record\n- All associated clusters\n- All associated reviews\n\nThis action cannot be undone.`)) {
+      return;
+    }
+
+    setDeletingId(uploadId);
+    try {
+      // Delete from Supabase - cascading deletes will handle clusters and reviews
+      const { error } = await supabase
+        .from('uploads')
+        .delete()
+        .eq('id', uploadId);
+
+      if (error) throw error;
+
+      // Remove from local state
+      setUploads(prevUploads => prevUploads.filter(u => u.id !== uploadId));
+    } catch (error) {
+      console.error('Error deleting upload:', error);
+      alert('Failed to delete upload. Please try again.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const fetchUploadHistory = async () => {
     try {
@@ -289,15 +316,27 @@ export default function ClustersPage() {
                     </div>
                   )}
 
-                  {/* View Analytics Button */}
-                  <div className="mt-4 pt-4 border-t border-white/10">
+                  {/* Action Buttons */}
+                  <div className="mt-4 pt-4 border-t border-white/10 flex gap-3">
                     <button
                       onClick={() => router.push(`/analytics?upload_id=${upload.id}`)}
-                      className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-medium transition-all hover:shadow-lg hover:shadow-orange-500/25 flex items-center justify-center gap-2"
+                      className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-medium transition-all hover:shadow-lg hover:shadow-orange-500/25 flex items-center justify-center gap-2"
                     >
                       <TrendingUp className="w-4 h-4" />
                       View Analytics
                       <ChevronRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(upload.id, upload.filename)}
+                      disabled={deletingId === upload.id}
+                      className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/30 hover:bg-red-500/20 text-red-400 font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Delete upload"
+                    >
+                      {deletingId === upload.id ? (
+                        <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
                     </button>
                   </div>
                 </>
