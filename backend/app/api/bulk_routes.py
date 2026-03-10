@@ -89,13 +89,21 @@ class ClusterDetailResponse(BaseModel):
 
 # Dependency to get DB session
 def get_db_session():
-    """Get database session for dependency injection."""
+    """Get database session for dependency injection with proper error handling."""
     from app.api.bulk_api import get_engine_instance
     engine = get_engine_instance()
     if not engine:
         raise HTTPException(status_code=503, detail="Database not initialized")
-    with Session(engine) as session:
+    
+    session = Session(engine)
+    try:
         yield session
+    except Exception as e:
+        logger.error(f"Database session error: {e}")
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -523,24 +531,63 @@ async def get_cluster_details(
     Returns:
         ClusterDetailResponse with full reviews
     """
-    # Get cluster
-    cluster = session.get(Cluster, cluster_id)
-    if not cluster:
-        raise HTTPException(status_code=404, detail="Cluster not found")
+    try:
+        # Get cluster with timeout protection
+        cluster = session.get(Cluster, cluster_id)
+        if not cluster:
+            raise HTTPException(status_code=404, detail="Cluster not found")
+        
+        # Build response with safe field access
+        return ClusterDetailResponse(
+            id=cluster.id,
+            title=cluster.title,
+            severity=cluster.severity,
+            status=cluster.status,
+            review_count=cluster.review_count,
+            rca_title=cluster.rca_title,
+            rca_hypothesis=cluster.rca_hypothesis,
+            rca_steps=cluster.rca_steps,
+            rca_fix=cluster.rca_fix,
+            affected_versions=cluster.affected_versions or [],
+            affected_devices=cluster.affected_devices or [],
+            keywords=cluster.keywords or [],
+            sample_reviews=cluster.sample_reviews or [],
+            created_at=cluster.created_at.isoformat()
+        )
+        
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        logger.error(f"Database error fetching cluster {cluster_id}: {e}")
+        # Clean up session on error to prevent connection leaks
+        session.rollback()
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable")
+
+
+@router.get("/health/db", response_model=dict)
+async def health_check_db():
+    """
+    Check database connection pool health for monitoring and diagnostics.
     
-    return ClusterDetailResponse(
-        id=cluster.id,
-        title=cluster.title,
-        severity=cluster.severity,
-        status=cluster.status,
-        review_count=cluster.review_count,
-        rca_title=cluster.rca_title,
-        rca_hypothesis=cluster.rca_hypothesis,
-        rca_steps=cluster.rca_steps,
-        rca_fix=cluster.rca_fix,
-        affected_versions=cluster.affected_versions,
-        affected_devices=cluster.affected_devices,
-        keywords=cluster.keywords,
-        sample_reviews=cluster.sample_reviews,
-        created_at=cluster.created_at.isoformat()
-    )
+    Returns:
+        Database connection pool status
+    """
+    from app.api.bulk_api import get_engine_instance
+    
+    try:
+        engine = get_engine_instance()
+        if not engine:
+            return {"status": "error", "message": "Database engine not initialized"}
+        
+        pool = engine.pool
+        return {
+            "status": "ok",
+            "pool_size": pool.size(),
+            "checked_out": pool.checkedout(),
+            "checked_in": pool.checkedin(),
+            "overflow": pool.overflow(),
+            "invalid": pool.invalid()
+        }
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return {"status": "error", "message": str(e)}

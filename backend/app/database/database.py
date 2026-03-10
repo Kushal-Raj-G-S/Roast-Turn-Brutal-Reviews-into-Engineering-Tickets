@@ -34,7 +34,7 @@ engine = create_engine(
     pool_size=10,        # Base pool for steady-state load
     max_overflow=20,     # Additional connections for burst traffic
     pool_recycle=300,
-    pool_timeout=30,
+    pool_timeout=10,     # Reduced from 30 to fail faster and avoid hanging connections
     connect_args={
         "keepalives": 1,
         "keepalives_idle": 30,
