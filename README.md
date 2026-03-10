@@ -1,4 +1,4 @@
-﻿# Roast 🔥
+# Roast 🔥
 
 **Turn app store reviews into engineering tickets — automatically.**
 
@@ -205,7 +205,7 @@ HUGGINGFACE_API_KEY  Embeddings via HuggingFace Inference API
 
 ## Deploy (Production)
 
-**Backend → Heroku**
+**Backend → DigitalOcean**
 ```
 web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
@@ -238,13 +238,5 @@ NEXT_PUBLIC_API_URL=https://your-backend.herokuapp.com
 /dataset          25+ real app review CSVs (Instagram, WhatsApp, TikTok, Spotify…)
                   + adversarial test sets (bot campaigns, spam, corrupted data)
 ```
-
----
-
-## ☕ Support
-
-[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/kushal.raj.gs)
-
----
 
 MIT License
