@@ -25,14 +25,14 @@ DATABASE_URL = _RAW_DATABASE_URL.replace(":5432/", ":6543/")
 ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://") if DATABASE_URL.startswith("postgresql://") else DATABASE_URL
 
 # Create SQLAlchemy engine (sync)
-# pool_size=2 + max_overflow=2 = max 4 connections from this engine.
+# pool_size=10 + max_overflow=20 = max 30 connections from this engine.
 # Supabase free tier Transaction mode allows ~100 concurrent connections.
 engine = create_engine(
     DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    pool_size=2,        # reduced from 10 — 4 total connections max
-    max_overflow=2,
+    pool_size=10,        # Base pool for steady-state load
+    max_overflow=20,     # Additional connections for burst traffic
     pool_recycle=300,
     pool_timeout=30,
     connect_args={
