@@ -12,7 +12,7 @@ import Link from "next/link";
 import { ArrowRight, Zap, Brain, Target, Layers, Sparkles, Shield } from "lucide-react";
 import { GoogleIcon, GithubIcon } from "@/components/ui/BrandIcons";
 import { SpotlightCard } from "@/components/ui";
-import { PhoneMockup } from "@/components/landing/PhoneMockup";
+import { PipelineScrollWorld } from "@/components/landing/PipelineScrollWorld";
 import { supabase } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
@@ -171,14 +171,10 @@ export default function MarketingPage() {
       )}
 
       {/* ================================================================== */}
-      {/* PHONE MOCKUP HERO - Scroll-Driven Animation (300vh) */}
+      {/* PIPELINE SCROLL WORLD - Scroll-driven flythrough of Roast's own pipeline */}
       {/* ================================================================== */}
       <div className="relative" style={{ isolation: "isolate" }}>
-        {/* Animated Mesh Gradient Background */}
-        <div className="mesh-gradient" style={{ zIndex: 0 }} />
-        <div className="relative" style={{ zIndex: 1 }}>
-          <PhoneMockup />
-        </div>
+        <PipelineScrollWorld />
       </div>
 
       {/* ================================================================== */}

@@ -175,15 +175,21 @@ async def bulk_upload(
                 detail=f"File too large. Max size: {config.MAX_UPLOAD_SIZE_MB}MB"
             )
 
-        # 2. Row-count (review) limit — quick pre-flight count
+        # 2. Row-count (review) — computed unconditionally now (it's just a
+        # byte scan, already cheap) so it can be stored on the upload record
+        # below. Previously this was only computed for capped plans purely
+        # for the limit check, then thrown away — meaning total_reviews was
+        # None for the entire multi-minute processing window regardless of
+        # plan, and the frontend had no real number to scale a progress
+        # estimate against until the very end.
+        file.file.seek(0)
+        raw = await file.read()
+        file.file.seek(0)
+        row_count = raw.count(b"\n")  # fast approximation (header not counted)
+
         if not reviews_unlimited(plan):
-            file.file.seek(0)
-            raw = await file.read()
-            file.file.seek(0)
-            row_count = raw.count(b"\n")  # fast approximation (header not counted)
-            
             logger.info(f"📝 Review count check: {row_count:,} rows | limit={limits['max_reviews']:,}")
-            
+
             if row_count > limits["max_reviews"]:
                 logger.warning(f"⛔ REVIEW LIMIT EXCEEDED: {row_count:,} > {limits['max_reviews']:,}")
                 raise HTTPException(
@@ -198,16 +204,22 @@ async def bulk_upload(
                 )
             else:
                 logger.info(f"✅ Review count OK: {row_count:,} <= {limits['max_reviews']:,}")
-        
+
         # Create upload directory
         config.ensure_upload_dir()
-        
+
         # Create upload record with authenticated user
         # Use status='shadow_processing' so worker ignores it (orchestrator handles these)
+        # total_reviews is set immediately from the pre-flight row count (an
+        # approximation — actual kept/processed counts land later) so the
+        # upload page's progress estimate has a real number to scale against
+        # from its very first poll, instead of only learning the size once
+        # processing has already finished.
         upload = Upload(
             user_id=user.id,
             filename=file.filename,
             file_size_bytes=file_size_bytes,
+            total_reviews=row_count,
             status="shadow_processing"  # Orchestrator-managed, worker ignores
         )
         

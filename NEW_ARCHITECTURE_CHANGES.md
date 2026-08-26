@@ -307,6 +307,52 @@ Existing dependencies were also bumped significantly across the board (FastAPI, 
 
 ---
 
+## 13. Upload progress screen — honest, size-aware pacing (2026-08-27)
+
+**Files:** `frontend/src/app/(app)/upload/page.tsx`, `backend/app/api/bulk_routes.py`
+
+### Old
+The processing screen showed a static spinner, a hardcoded "Processing Your Reviews" title, and a progress bar bound to `progress.progress` — a field the `/uploads/{id}/progress` endpoint never actually returns. In practice this animated from `0%` to `undefined%` (visible as a broken/blank bar in the browser console: *"You are trying to animate width from '0%' to 'undefined%'"*) and sat there, unchanged, for the entire multi-minute job. `total_reviews`/`filtered_noise`/`clusters_created` were also only ever populated on the Upload DB row **atomically at the very end** of processing, alongside `clusters_created` — meaning the frontend had zero real incremental signal to show during the actual wait.
+
+### New
+- **`bulk_routes.py`**: the pre-flight row count (already computed on every upload for plan-limit enforcement, then previously discarded) is now stored on the `Upload` row as `total_reviews` at creation time — before any processing happens. This is later overwritten with the exact final count by `shadow_deployment.py` once processing completes, so there's no conflict, just an earlier, real, approximate number available immediately.
+- **`upload/page.tsx`**: the progress bar is now driven by an elapsed-time estimate that **scales with that real review count** (`~21ms/review`, calibrated from an actual local run: 15,000 reviews ≈ 5.3 min end-to-end), instead of a fixed time constant. This was a deliberate fix for a real failure mode caught in testing: a fixed-time curve would race ahead of reality on a large upload — e.g. showing 90%+ complete while a 200k-review file was still deep in the embedding step alone, actively misleading the user into thinking it was nearly done when it wasn't. The curve is asymptotic and capped at 96% (never claims done until `status === 'completed'` actually arrives), so if the real job runs longer than the estimate, the bar just creeps rather than lying.
+- A 5-stage tracker (filter → embed → cluster → severity → AI RCA), each stage keyed to a real pipeline step and a percentage range of the estimate, replaces the single static label — with a step-checklist UI (checkmarks fill in as stages pass), a small flame-icon tally next to the heading, ambient decorative embers around the stage icon, and a rotating 4-second tip ticker with genuine facts about the pipeline (dedup, semantic clustering, self-critiquing agent, regression checks) rather than filler copy.
+- Review-count/kept/cluster stat tiles now always render (with `—` placeholders) instead of being hidden entirely until data lands at the very end.
+
+### Why this matters
+Verified against two real large uploads during testing: a 15k-review file (which the original time constant was tuned against) and a 200k-review file, where the fixed-time version would have shown a badly misleading near-complete bar. The size-aware version keeps the estimate honest at both ends — quick files still feel responsive, and a 200k-review job (observed taking 15–20+ min locally, CPU-only, no GPU) shows a bar that paces itself accordingly instead of finishing visually in under 5 minutes.
+
+---
+
+## 14. Marketing landing page — hero replaced with a scroll-driven "pipeline world" (2026-08-27)
+
+**New file:** `frontend/src/components/landing/PipelineScrollWorld.tsx`
+**New assets:** `frontend/public/scroll-world/scene-{1..6}.webp`, `frontend/src/fonts/raleway.ts` + `frontend/src/fonts/raleway/*.ttf`
+**Touched:** `frontend/src/app/(marketing)/page.tsx`
+
+### Old
+The marketing page's hero was `PhoneMockup` (section 9.5) — a scroll-driven phone demo (lock screen → Play Store → reviews scrolling with pop-in annotations).
+
+### New
+`PhoneMockup` is replaced by `PipelineScrollWorld`: six AI-generated isometric diorama stills (dark glossy low-poly tech miniatures, ember-orange/red-on-black, matching Roast's own brand palette) mapped one-to-one to the six real stages the backend actually runs on a batch of reviews — Inbox (ingest) → Filter (noise removal) → Constellation (semantic clustering) → Tower (severity ranking) → War Room (the agentic RCA pipeline from section 6) → Ticket (export). As the visitor scrolls through a pinned 6×170vh section, the current scene crossfades into the next with a slow Ken-Burns push-in, and a bottom-pinned copy block (eyebrow / headline / body, set in a self-hosted **Raleway**, scoped to just this component via `next/font/local` — not added to the site's global font stack) swaps in sync with whichever scene is dominant. A right-edge dot rail shows scroll position; `useReducedMotion()` swaps the whole thing for a plain stacked-sections fallback with no scroll-jacking.
+
+Stills were generated through Codex's `$imagegen` tool (OpenAI image generation) from a shared style preamble (fixed palette, "isometric low-poly diorama, near-black background, glowing flame emblem present in every scene") so the six scenes read as one consistent world rather than six unrelated illustrations, then converted to WebP (~60-120KB each, down from ~1.3-2MB PNGs) via `ffmpeg`.
+
+### Bugs hit and fixed during the build (kept here because most of them explain real, non-obvious Framer Motion / browser behavior, not just "AI made a mistake")
+
+- **Scene 1 invisible at scroll-top.** The first attempt drove each scene's opacity off four hand-computed keyframes (`fadeIn, bandStart, bandEnd, fadeOut`) per scene, clamped with `Math.max(0, ...)` / `Math.min(1, ...)` at the array's own edges. For index 0, `fadeIn` and `bandStart` both clamped to exactly `0` — a duplicate keyframe input, which `useTransform` can't resolve unambiguously, leaving the very first scene stuck transparent.
+- **A genuine runtime crash** (`Cannot read properties of undefined (reading 'get')`, thrown inside `SceneLayer`) turned out to be the actual root cause of most of the visually-wrong behavior seen while iterating (the finale logo bleeding into the wrong scene's band, an earlier scene staying visible under the wrong heading) — a broken render tree left React showing stale DOM from before the crash while state elsewhere kept updating normally, which looked like inconsistent scroll math but wasn't. Root-caused by not trusting the first (plausible-looking) theory and instead confirming via `document.hidden`/console history that earlier "it's just uncomposited-tab throttling" explanations didn't hold up once tested on a clean tab.
+- **Fixed by replacing all of the per-scene keyframe math with one closed-form trapezoid** — `opacity` for scene *i* is a function of `|scenePosition - i|` alone (`scenePosition` being a single continuous `0..N-1` value derived once from `scrollYProgress`), expressed via the standard 4-point array `useTransform` overload with keyframes `[i - halfWidth, i - plateau, i + plateau, i + halfWidth]`. Because these are just `i` offset by fixed constants — never clamped against a shared 0/1 boundary — there is nothing left for index 0 or index `N-1` to collide with; the crash did not recur after this rewrite.
+- **Scene 6 never loading.** All six scene `<img>` layers occupy the identical `position: absolute; inset: 0` box (only `opacity` differs), so the browser's native `loading="lazy"` — which decides by viewport distance — couldn't distinguish them and silently never fired for one of them, leaving an earlier scene's image stuck rendered underneath the last scene's (correct) pinned copy. Fixed by loading all six eagerly; six small WebP files at hero-scale is not something lazy-loading was meaningfully saving anyway.
+- **Diorama stills reading as solid black.** The generation art-direction (small floating island on a `#0a0a0a` background) is fine for a compact thumbnail but, stretched full-bleed as a hero background, the frame is mostly near-black by design — combined with a dark bottom gradient for text legibility, several scenes were reading as an empty black rectangle rather than a rendered image. Fixed with a `brightness(1.65) contrast(1.15) saturate(1.2)` CSS filter on every scene image, and by shrinking the legibility gradient to only darken near the very bottom instead of the whole frame.
+- **`logo.png` pixelation at hero scale.** The finale scene briefly used the site's actual brand mark (`/logo.png`) instead of AI-generated art, per a request to make the brand connection unmistakable. `logo.png` is a deliberately pixel-art 500×500 asset — crisp as a small nav icon, but visibly blocky stretched to 600-800px+. Capped its display size to 160-224px and set `image-rendering: pixelated` so the pixel art reads as an intentional style rather than a blurry upscale. (The finale scene was ultimately reverted to use its own AI-generated diorama art instead of the logo, for visual consistency with the other five scenes — the logo swap and the sizing/rendering fix both remain available if that decision changes again.)
+
+### Why this matters
+The old hero demoed the product's *UI* (a phone showing the app). The new one demoes the product's *pipeline* — the actual sequence of things Roast does to a batch of reviews, narrated scene-by-scene, so the value proposition is legible before a visitor ever signs in.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -323,3 +369,5 @@ Existing dependencies were also bumped significantly across the board (FastAPI, 
 | AI Debug Center | Static prompt copy tab | Live model-style/temperature playground |
 | Debug Center trust signal | None | Clickable evidence citations, faithfulness badges |
 | Upload failure handling | Could hang at "processing" forever | Explicitly marked `failed` with an error message |
+| Upload progress bar | Bound to a field the backend never sent (animated to `undefined%`) | Size-aware estimate scaled by the file's real review count |
+| Marketing hero | Phone-demo scroll animation | Scroll-driven "pipeline world" — 6 AI-generated scenes narrating the real backend pipeline |

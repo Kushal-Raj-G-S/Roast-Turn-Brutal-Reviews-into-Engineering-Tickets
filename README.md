@@ -21,7 +21,7 @@
   ### 📤 Upload & Ingest
   - Drag-and-drop any reviews CSV (up to 500 MB) from Google Play, App Store, or custom exports
   - Schema intelligence auto-detects 13+ column formats — no mapping required
-  - Live progress during processing: total reviews ingested, noise filtered, clusters created, total processing time
+  - **Size-aware processing screen** — a 5-stage tracker (filter → embed → cluster → severity → AI RCA) paced by the file's own real review count, not a generic spinner, plus rotating pipeline facts so a multi-minute job on a large file doesn't feel stuck
   - Supports up to **100,000 reviews per file** on paid plans (tested up to 900k+ raw rows)
 
   ### 🤖 AI Analysis Pipeline
@@ -260,7 +260,7 @@
       app/          Next.js App Router pages (dashboard, upload, analytics,
                     ai-debug, clusters, pricing, settings, login, docs)
       components/   KanbanBoard, TicketExportModal, UsageDashboard, SpotlightCard,
-                    AgentAnalysisPanel, BrandIcons
+                    AgentAnalysisPanel, BrandIcons, PipelineScrollWorld (landing hero)
   /dataset          25+ real app review CSVs (Instagram, WhatsApp, TikTok, Spotify…)
                     + adversarial test sets (bot campaigns, spam, corrupted data)
   ```
