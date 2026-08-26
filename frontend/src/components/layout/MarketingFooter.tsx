@@ -6,7 +6,8 @@
  */
 
 import Link from "next/link";
-import { Github, Twitter, Mail } from "lucide-react";
+import { Mail } from "lucide-react";
+import { GithubIcon, XIcon } from "@/components/ui/BrandIcons";
 
 export function MarketingFooter() {
   return (
@@ -82,7 +83,7 @@ export function MarketingFooter() {
                 rel="noopener noreferrer"
                 className="p-2 rounded-lg bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10 transition-colors"
               >
-                <Github className="w-5 h-5" />
+                <GithubIcon className="w-5 h-5" />
               </a>
               <a
                 href="https://twitter.com"
@@ -90,7 +91,7 @@ export function MarketingFooter() {
                 rel="noopener noreferrer"
                 className="p-2 rounded-lg bg-white/5 text-neutral-400 hover:text-white hover:bg-white/10 transition-colors"
               >
-                <Twitter className="w-5 h-5" />
+                <XIcon className="w-5 h-5" />
               </a>
               <a
                 href="mailto:hello@roast.dev"

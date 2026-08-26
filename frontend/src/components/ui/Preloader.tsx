@@ -3,7 +3,7 @@
 /**
  * Preloader - Cinematic Page Load Animation
  * ==========================================
- * Full-screen preloader with fire emoji logo
+ * Full-screen preloader with the ROAST logo
  * Shows on first page load for ~1.5 seconds
  */
 
@@ -31,21 +31,21 @@ export function Preloader() {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.5, ease: "easeOut" }}
         >
-          <motion.div
-            className="text-9xl"
+          <motion.img
+            src="/logo.png"
+            alt="Roast"
+            className="w-96 h-96"
             initial={{ scale: 0.5, opacity: 0 }}
-            animate={{ 
+            animate={{
               scale: [0.5, 1.2, 1.0],
-              opacity: 1 
+              opacity: 1
             }}
-            transition={{ 
-              duration: 0.8, 
+            transition={{
+              duration: 0.8,
               ease: [0.34, 1.56, 0.64, 1], // Custom ease-out bounce
               times: [0, 0.6, 1]
             }}
-          >
-            🔥
-          </motion.div>
+          />
         </motion.div>
       )}
     </AnimatePresence>

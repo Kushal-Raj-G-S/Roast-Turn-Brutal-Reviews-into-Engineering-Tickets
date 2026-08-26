@@ -196,7 +196,8 @@ async def trigger_shadow_deployment(upload_id: int, csv_path: str):
                     upload.filtered_noise = result.v1_output.get("filtered_reviews", 0)
                     upload.clusters_created = len(result.v1_output.get("clusters", []))
                     upload.processing_time_ms = int(result.v1_metrics.duration_ms)
-                    
+                    upload.processing_time_seconds = round(result.v1_metrics.duration_ms / 1000, 2)
+
                     # Add schema detection info if present
                     schema_info = result.v1_output.get("schema_warnings")
                     if schema_info:
@@ -274,8 +275,24 @@ async def trigger_shadow_deployment(upload_id: int, csv_path: str):
                     except Exception as eg:
                         logger.warning(f"Pre-generation trigger failed (non-fatal): {eg}")
 
+                elif upload:
+                    # v1 processing failed — mark the upload as failed instead of
+                    # leaving it stuck at "shadow_processing" forever. Previously
+                    # this branch only logged a warning and left the status
+                    # untouched, so a failed upload would spin in the UI with no
+                    # way to know processing had actually stopped.
+                    upload.status = "failed"
+                    upload.error_message = (
+                        (result.v1_metrics.error[:500] if getattr(result.v1_metrics, "error", None) else None)
+                        or "Processing failed — please try re-uploading the file."
+                    )
+                    upload.completed_at = datetime.utcnow()
+                    session.commit()
+                    logger.warning(
+                        f"⚠️ Marked upload {upload_id} as failed (v1_success={result.v1_metrics.success if result else 'No result'})"
+                    )
                 else:
-                    logger.warning(f"[DEBUG] Skipping update: upload={upload}, v1_success={result.v1_metrics.success if result else 'No result'}")
+                    logger.warning(f"[DEBUG] Skipping update: upload not found for id={upload_id}")
         except Exception as e:
             logger.error(f"❌ Failed to update upload {upload_id} status: {e}", exc_info=True)
         

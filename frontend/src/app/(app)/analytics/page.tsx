@@ -30,6 +30,7 @@ import {
   Loader2,
   Download,
   FileSpreadsheet,
+  HelpCircle,
 } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
@@ -37,7 +38,8 @@ import { apiClient } from "@/lib/api-client";
 import { supabase } from "@/lib/supabase/client";
 import { SpotlightCard } from "@/components/ui";
 import { TicketExportModal } from "@/components/ui/TicketExportModal";
-import type { ClusterDetail } from "@/lib/api-client";
+import { AgentAnalysisPanel } from "@/components/ui/AgentAnalysisPanel";
+import type { ClusterDetail, AgentMetadata } from "@/lib/api-client";
 
 type AnalyticsData = {
   user_statistics: {
@@ -82,6 +84,7 @@ type AnalyticsData = {
     created_at: string;
     regression_detected?: boolean;
     regression_of_title?: string;
+    ai_metadata?: AgentMetadata | null;
   }>;
   upload_data?: {
     filename: string;
@@ -90,6 +93,13 @@ type AnalyticsData = {
     filtered_noise?: number;
   };
 };
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainingSeconds}s`;
+}
 
 export default function AnalyticsPage() {
   const searchParams = useSearchParams();
@@ -101,6 +111,32 @@ export default function AnalyticsPage() {
   const [clusterDetails, setClusterDetails] = useState<Map<number, ClusterDetail>>(new Map());
   const [exportCluster, setExportCluster] = useState<NonNullable<AnalyticsData['clusters']>[number] | null>(null);
   const [loadingExportId, setLoadingExportId] = useState<number | null>(null);
+  // Whether the RCA/RAGAS enrichment poll gave up without ever seeing full
+  // enrichment land -- distinct from "still polling normally", shown as a
+  // softer "taking longer than usual" note instead of an active spinner.
+  const [aiEnrichmentGaveUp, setAiEnrichmentGaveUp] = useState(false);
+
+  // ── AI enrichment pending banner ──────────────────────────────────────────
+  // The page loads with clusters as soon as v1 processing finishes, but the
+  // RCA agent + RAGAS scoring (ai_metadata: recurring/speculative/well-
+  // supported/severity-adjusted badges, the full AgentAnalysisPanel) runs as
+  // a SEPARATE background phase afterwards. Without a visible indicator, a
+  // user landing on the page in that window sees what looks like a finished
+  // result and has no reason to expect more — the polling elsewhere on this
+  // page updates the data, but silently, easy to miss if you're not staring
+  // at the page. This banner makes the "more is coming" state explicit.
+  const aiEnrichmentPending = useMemo(() => {
+    if (!uploadId || aiEnrichmentGaveUp) return false;
+    const clusters = analytics?.clusters;
+    if (!clusters || clusters.length === 0) return false;
+    const eligibleCount = Math.min(
+      5,
+      clusters.filter(c => c.severity === 'critical' || c.severity === 'high').length
+    );
+    if (eligibleCount === 0) return false;
+    const enrichedCount = clusters.filter(c => c.ai_metadata).length;
+    return enrichedCount < eligibleCount;
+  }, [uploadId, analytics?.clusters, aiEnrichmentGaveUp]);
 
   // â”€â”€ Velocity Spike Detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Within an upload, a cluster is "SPIKING" when its review count is
@@ -439,6 +475,59 @@ export default function AnalyticsPage() {
     fetchAnalytics();
   }, [uploadId]);
 
+  // ── Poll for AI enrichment landing in the background ─────────────────────
+  // The page loads with clusters as soon as v1/v2 processing finishes, but
+  // the RCA agent + RAGAS scoring (ai_metadata: recurring/speculative/
+  // well-supported/severity-adjusted badges, the full AgentAnalysisPanel)
+  // runs as a SEPARATE background phase afterwards, and only ever targets
+  // the top 5 CRITICAL/HIGH clusters (backend: MAX_CLUSTERS_FOR_RCA) — most
+  // of the ~20 persisted clusters never get ai_metadata by design. So we
+  // can't wait for "every cluster has it"; that would poll the full budget
+  // below on almost every upload. Instead wait for however many of the
+  // CRITICAL/HIGH clusters (up to 5) are actually eligible, or give up
+  // after ~1 min — generous for that phase even under NVIDIA rate limits.
+  useEffect(() => {
+    if (!uploadId) return;
+    setAiEnrichmentGaveUp(false);
+    let cancelled = false;
+    let pollCount = 0;
+    const MAX_POLLS = 12;
+    const MAX_RCA_TARGETS = 5;
+
+    const poll = async () => {
+      if (cancelled) return;
+      const { data: clustersData } = await supabase
+        .from('clusters')
+        .select('*')
+        .eq('upload_id', uploadId)
+        .order('severity', { ascending: true });
+      if (cancelled || !clustersData) return;
+
+      setAnalytics(prev => (prev ? { ...prev, clusters: clustersData } : prev));
+
+      pollCount++;
+      const eligibleCount = Math.min(
+        MAX_RCA_TARGETS,
+        clustersData.filter((c: { severity?: string }) => c.severity === 'critical' || c.severity === 'high').length
+      );
+      const enrichedCount = clustersData.filter((c: { ai_metadata?: unknown }) => c.ai_metadata).length;
+      const stillPending = clustersData.length === 0 || enrichedCount < eligibleCount;
+      if (stillPending && pollCount < MAX_POLLS) {
+        timeoutId = setTimeout(poll, 5000);
+      } else if (stillPending) {
+        // Gave up without ever seeing it land -- tell the user explicitly
+        // rather than leaving a spinner running forever or vanishing silently.
+        setAiEnrichmentGaveUp(true);
+      }
+    };
+
+    let timeoutId = setTimeout(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [uploadId]);
+
   const fetchAnalytics = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -645,7 +734,7 @@ export default function AnalyticsPage() {
               Analytics Dashboard
             </h1>
             <p className="text-neutral-400">
-              {uploadId 
+              {uploadId
                 ? (
                   <span className="flex items-center gap-2">
                     <span className="font-semibold text-white">
@@ -655,6 +744,15 @@ export default function AnalyticsPage() {
                     </span>
                     <span className="text-neutral-600">•</span>
                     <span>{user_statistics.total_reviews_analyzed.toLocaleString()} reviews processed</span>
+                    {typeof analytics?.upload_data?.processing_time_seconds === 'number' && (
+                      <>
+                        <span className="text-neutral-600">•</span>
+                        <span className="flex items-center gap-1 text-neutral-400">
+                          <Clock className="w-3.5 h-3.5" />
+                          Analyzed in {formatDuration(analytics.upload_data.processing_time_seconds)}
+                        </span>
+                      </>
+                    )}
                   </span>
                 )
                 : "Comprehensive insights and trends from all your reviews"
@@ -891,6 +989,24 @@ export default function AnalyticsPage() {
         const topMeta = severityMeta[top.severity] ?? severityMeta.low;
         const topPct = Math.round(((top.review_count || 0) / totalReviews) * 100);
 
+        // A LOW-severity "issue" is often just praise the pipeline kept as a
+        // cluster (e.g. "Nice app, excellent...") -- calling that a
+        // "complaint" is actively wrong, not just imprecise. Detect it from
+        // the title's own language instead of assuming severity == complaint.
+        const positiveWords = /\b(nice|good|great|excellent|love|like|awesome|amazing|perfect|best|fantastic|super|wonderful|fun|enjoy|enjoying|cool|helpful|useful|satisfied|happy)\b/i;
+        const negativeWords = /\b(bad|crash|broken|bug|issue|problem|fail|hate|worst|terrible|slow|annoying|error|stuck|lag|freeze|glitch)\b/i;
+        const topTitleClean = cleanTitle(top.title);
+        const isTopPositive =
+          top.severity === 'low' &&
+          positiveWords.test(topTitleClean) &&
+          !negativeWords.test(topTitleClean);
+
+        const topHeading = isTopPositive ? '#1 Top Signal' : '#1 User Complaint';
+        const topIconBg = isTopPositive
+          ? 'from-emerald-500/20 to-green-500/20 border-emerald-500/20'
+          : 'from-red-500/20 to-orange-500/20 border-red-500/20';
+        const topIconColor = isTopPositive ? 'text-emerald-400' : 'text-red-400';
+
         return (
           <motion.div
             initial={{ opacity: 0, y: 16 }}
@@ -901,12 +1017,12 @@ export default function AnalyticsPage() {
               {/* Card header */}
               <div className="flex items-center justify-between mb-5">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-red-500/20 to-orange-500/20 border border-red-500/20 flex items-center justify-center">
-                    <Flame className="w-4 h-4 text-red-400" />
+                  <div className={`w-9 h-9 rounded-lg bg-gradient-to-br ${topIconBg} border flex items-center justify-center`}>
+                    <Flame className={`w-4 h-4 ${topIconColor}`} />
                   </div>
                   <div>
-                    <h3 className="font-bold text-white">#1 User Complaint</h3>
-                    <p className="text-xs text-neutral-500">Loudest cluster by review volume Â· {totalReviews.toLocaleString()} total reviews</p>
+                    <h3 className="font-bold text-white">{topHeading}</h3>
+                    <p className="text-xs text-neutral-500">Loudest cluster by review volume - {totalReviews.toLocaleString()} total reviews</p>
                   </div>
                 </div>
                 <span className={`text-xs font-black px-2.5 py-1 rounded-full border ${topMeta.color} ${topMeta.textBg} ${topMeta.border}`}>
@@ -1167,6 +1283,18 @@ export default function AnalyticsPage() {
           const isSpiking = spikeIds.has(cluster.id);
           const isRegression = !!cluster.regression_detected;
 
+          // â”€â”€ User-facing AI badges (same agent data, plain-language framing) â”€â”€
+          const meta = cluster.ai_metadata;
+          const precedentCount = meta?.similar_issues?.length ?? 0;
+          const isRecurring = precedentCount > 0;
+          const faithfulness = meta?.eval_scores?.faithfulness;
+          const hasTrustSignal = typeof faithfulness === 'number';
+          const isWellSupported = hasTrustSignal && faithfulness! >= 0.5;
+          const severityAdjusted = !!(
+            meta?.suggested_severity &&
+            meta.suggested_severity.toLowerCase() !== cluster.severity.toLowerCase()
+          );
+
           return (
             <motion.div
               key={cluster.id}
@@ -1184,8 +1312,8 @@ export default function AnalyticsPage() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
-                      {/* âš¡ Spike  /  â†© Regression badges */}
-                      {(isSpiking || isRegression) && (
+                      {/* Spike / Regression / Recurring / trust / severity-correction badges */}
+                      {(isSpiking || isRegression || isRecurring || hasTrustSignal || severityAdjusted) && (
                         <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
                           {isSpiking && (
                             <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30 tracking-wide">
@@ -1200,6 +1328,40 @@ export default function AnalyticsPage() {
                                 : 'This issue was previously resolved and has re-appeared'}
                             >
                               <RotateCcw className="w-2.5 h-2.5" />REGRESSION
+                              <HelpCircle className="w-2.5 h-2.5 opacity-60" />
+                            </span>
+                          )}
+                          {isRecurring && (
+                            <span
+                              className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 tracking-wide cursor-help"
+                              title={meta!.similar_issues.map(s => `"${s.title}" (${s.severity})`).join('\n')}
+                            >
+                              🔁 RECURRING - seen {precedentCount}x before
+                              <HelpCircle className="w-2.5 h-2.5 opacity-60" />
+                            </span>
+                          )}
+                          {hasTrustSignal && (
+                            isWellSupported ? (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 tracking-wide">
+                                ✓ WELL-SUPPORTED BY EVIDENCE
+                              </span>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 tracking-wide cursor-help"
+                                title="The AI's explanation goes beyond what's directly stated in the reviews -- treat this as a lead, not a confirmed diagnosis."
+                              >
+                                ! SPECULATIVE - VERIFY MANUALLY
+                                <HelpCircle className="w-2.5 h-2.5 opacity-60" />
+                              </span>
+                            )
+                          )}
+                          {severityAdjusted && (
+                            <span
+                              className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30 tracking-wide cursor-help"
+                              title={meta!.severity_reason}
+                            >
+                              SEVERITY ADJUSTED: {cluster.severity.toUpperCase()} {'->'} {meta!.suggested_severity}
+                              <HelpCircle className="w-2.5 h-2.5 opacity-60" />
                             </span>
                           )}
                         </div>
@@ -1230,9 +1392,9 @@ export default function AnalyticsPage() {
                 </button>
               </div>
 
-              {/* Accordion â€” sample reviews */}
+              {/* Accordion — AI agent analysis + sample reviews */}
               <AnimatePresence>
-                {isExpanded && details?.sample_reviews && (
+                {isExpanded && details && (
                   <motion.div
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: 'auto', opacity: 1 }}
@@ -1240,6 +1402,10 @@ export default function AnalyticsPage() {
                     transition={{ duration: 0.25, ease: 'easeInOut' }}
                     className={`border-t ${s.border}`}
                   >
+                    {details.ai_metadata && (
+                      <AgentAnalysisPanel metadata={details.ai_metadata} accentColor={s.color} />
+                    )}
+                    {details.sample_reviews && (
                     <div className="p-4 space-y-3 bg-black/20">
                       <p className={`text-xs ${s.color} font-semibold uppercase tracking-wider`}>
                         Sample Reviews ({details.sample_reviews.length})
@@ -1261,6 +1427,7 @@ export default function AnalyticsPage() {
                         </div>
                       ))}
                     </div>
+                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1297,6 +1464,17 @@ export default function AnalyticsPage() {
                       {analytics.clusters.length} clusters identified
                       {uploadId && ' from this upload'}
                     </p>
+                    {aiEnrichmentPending && (
+                      <p className="flex items-center gap-1.5 text-xs text-purple-300 mt-1.5">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        AI analysis still running for top issues — recurring/well-supported badges and agent details will appear here automatically, no need to refresh
+                      </p>
+                    )}
+                    {aiEnrichmentGaveUp && (
+                      <p className="text-xs text-neutral-500 mt-1.5">
+                        AI analysis is taking longer than usual (API rate limit) — reload the page in a bit to check again
+                      </p>
+                    )}
                   </div>
                 </div>
 

@@ -47,6 +47,10 @@ test_output.log
 # ChromaDB
 chroma_db/
 
+# Local vector store (embedded Qdrant, on-disk) + agent observability traces
+qdrant_data/
+traces/
+
 # OS
 .DS_Store
 Thumbs.db

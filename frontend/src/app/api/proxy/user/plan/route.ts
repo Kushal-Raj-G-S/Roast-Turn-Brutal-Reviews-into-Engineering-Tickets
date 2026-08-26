@@ -4,7 +4,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 
-const BACKEND_URL = process.env.BACKEND_URL || "https://roast-ytzqd.ondigitalocean.app";
+const BACKEND_URL =
+  process.env.BACKEND_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "https://roast-ytzqd.ondigitalocean.app";
 
 export async function GET(request: NextRequest) {
   try {

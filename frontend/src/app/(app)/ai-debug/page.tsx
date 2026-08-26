@@ -1,11 +1,10 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Sparkles,
-  Code2,
   Copy,
   CheckCircle2,
   AlertTriangle,
@@ -16,8 +15,13 @@ import {
   Brain,
   ChevronDown,
   ChevronUp,
+  FlaskConical,
+  Play,
+  RotateCcw,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { apiClient } from "@/lib/api-client";
+import type { AgentMetadata } from "@/lib/api-client";
 
 // ------------------------------------------------------------------ types ---
 
@@ -41,6 +45,8 @@ interface Cluster {
   affected_devices?: string[];
   keywords?: string[];
   created_at: string;
+  ai_metadata?: AgentMetadata | null;
+  rca_hypothesis?: string | null;
 }
 
 interface CategoryExplanation {
@@ -260,12 +266,11 @@ export default function AIDebugCenterPage() {
   const searchParams = useSearchParams();
   const uploadId = searchParams?.get("upload_id") ?? null;
 
-  const [viewMode, setViewMode] = useState<"explanation" | "prompt">(
+  const [viewMode, setViewMode] = useState<"explanation" | "playground">(
     "explanation"
   );
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [loading, setLoading] = useState(true);
-  const [copiedId, setCopiedId] = useState<number | null>(null);
   const [appName, setAppName] = useState<string>("unknown");
 
   useEffect(() => {
@@ -322,14 +327,6 @@ export default function AIDebugCenterPage() {
     }
   };
 
-  const copyPrompt = useCallback(
-    async (c: Cluster) => {
-      await navigator.clipboard.writeText(buildRCAPrompt(c, appName));
-      setCopiedId(c.id);
-      setTimeout(() => setCopiedId(null), 2000);
-    },
-    [appName]
-  );
 
   const grouped: Record<SeverityKey, Cluster[]> = {
     critical: clusters.filter((c) => c.severity === "critical"),
@@ -371,7 +368,7 @@ export default function AIDebugCenterPage() {
         <div className="flex items-center gap-3">
           {/* Mode toggle */}
           <div className="flex items-center gap-1 p-1 rounded-xl bg-black/40 border border-white/10">
-            {(["explanation", "prompt"] as const).map((mode) => (
+            {(["explanation", "playground"] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setViewMode(mode)}
@@ -384,9 +381,9 @@ export default function AIDebugCenterPage() {
                 {mode === "explanation" ? (
                   <Brain className="w-4 h-4" />
                 ) : (
-                  <Code2 className="w-4 h-4" />
+                  <FlaskConical className="w-4 h-4" />
                 )}
-                {mode === "explanation" ? "Explanations" : "Prompts"}
+                {mode === "explanation" ? "Explanations" : "Playground"}
               </button>
             ))}
           </div>
@@ -402,6 +399,13 @@ export default function AIDebugCenterPage() {
         </div>
       )}
 
+      {!uploadId && viewMode === "playground" && (
+        <div className="rounded-xl bg-purple-500/5 border border-purple-500/15 px-5 py-4 text-sm text-purple-300">
+          🧪 The playground runs against a specific cluster&apos;s data. Open a
+          specific upload to pick one and start experimenting.
+        </div>
+      )}
+
       {/* One section per severity */}
       {SEVERITIES.map((sev, i) => {
         const list = grouped[sev];
@@ -413,8 +417,6 @@ export default function AIDebugCenterPage() {
             clusters={list}
             viewMode={viewMode}
             uploadId={uploadId}
-            copiedId={copiedId}
-            copyPrompt={copyPrompt}
             appName={appName}
             delay={i * 0.08}
           />
@@ -431,17 +433,13 @@ function SeveritySection({
   clusters,
   viewMode,
   uploadId,
-  copiedId,
-  copyPrompt,
   appName,
   delay,
 }: {
   severity: SeverityKey;
   clusters: Cluster[];
-  viewMode: "explanation" | "prompt";
+  viewMode: "explanation" | "playground";
   uploadId: string | null;
-  copiedId: number | null;
-  copyPrompt: (c: Cluster) => void;
   appName: string;
   delay: number;
 }) {
@@ -451,6 +449,9 @@ function SeveritySection({
     status: "not_started",
   });
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Lets a clicked citation in the explanation text scroll its real cluster
+  // into view on the left, not just expand it off-screen.
+  const clusterRefs = useRef<Record<number, HTMLDivElement | null>>({});
 
   // Poll explanation when in explanation mode + have uploadId
   useEffect(() => {
@@ -558,7 +559,11 @@ function SeveritySection({
             const isSelected = selectedId === c.id;
             const reviews = c.sample_reviews || [];
             return (
-              <div key={c.id} className={`border-b border-white/4 ${isSelected ? `border-l-2 ${s.border}` : "border-l-2 border-transparent"}`}>
+              <div
+                key={c.id}
+                ref={(el) => { clusterRefs.current[c.id] = el; }}
+                className={`border-b border-white/4 ${isSelected ? `border-l-2 ${s.border}` : "border-l-2 border-transparent"}`}
+              >
                 {/* Cluster header row */}
                 <motion.div
                   initial={{ opacity: 0, x: -6 }}
@@ -581,15 +586,6 @@ function SeveritySection({
                     </p>
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    {viewMode === "prompt" && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); copyPrompt(c); }}
-                        className={`p-1.5 rounded-lg border ${s.border} ${s.bg} ${s.color} hover:bg-white/10 transition-all`}
-                        title="Copy debug prompt"
-                      >
-                        {copiedId === c.id ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                      </button>
-                    )}
                     {isSelected
                       ? <ChevronUp className={`w-3.5 h-3.5 ${s.color}`} />
                       : <ChevronDown className="w-3.5 h-3.5 text-neutral-600" />}
@@ -656,14 +652,17 @@ function SeveritySection({
               s={s}
               severity={severity}
               uploadId={uploadId}
+              allClusters={clusters}
+              onCite={(clusterId) => {
+                setSelectedId(clusterId);
+                clusterRefs.current[clusterId]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+              }}
             />
           ) : (
-            <PromptPanel
+            <PlaygroundPanel
               clusters={clusters}
               selectedId={selectedId}
               s={s}
-              copiedId={copiedId}
-              copyPrompt={copyPrompt}
               appName={appName}
             />
           )}
@@ -680,29 +679,71 @@ function ExplanationPanel({
   s,
   severity,
   uploadId,
+  allClusters,
+  onCite,
 }: {
   explanation: CategoryExplanation;
   s: (typeof SEV)[keyof typeof SEV];
   severity: string;
   uploadId: string | null;
+  allClusters: Cluster[];
+  onCite: (clusterId: number) => void;
 }) {
-  const renderText = (text: string) =>
-    text.split("\n").map((line, i) => {
-      const parts = line.split(/\*\*(.*?)\*\*/);
+  const escapeRegExp = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  // Turns each cluster's title into a clickable citation wherever it's
+  // literally mentioned in the explanation prose (the generation prompt
+  // feeds the model these exact titles and asks it to reference them, so
+  // they reliably show up verbatim). Clicking one jumps to the real
+  // cluster + its actual sample reviews on the left, instead of asking you
+  // to just trust the AI's summary of them.
+  const renderText = (text: string) => {
+    const titleEntries = allClusters
+      .map((c) => ({ id: c.id, title: cleanTitle(c.title).trim() }))
+      .filter((t) => t.title.length >= 6)
+      .sort((a, b) => b.title.length - a.title.length);
+    const titleToId = new Map(titleEntries.map((t) => [t.title.toLowerCase(), t.id]));
+    const citationPattern =
+      titleEntries.length > 0
+        ? new RegExp(`(${titleEntries.map((t) => escapeRegExp(t.title)).join("|")})`, "gi")
+        : null;
+
+    return text.split("\n").map((line, i) => {
+      const boldParts = line.split(/\*\*(.*?)\*\*/);
       return (
         <span key={i} className="block mb-2 leading-relaxed">
-          {parts.map((part, j) =>
-            j % 2 === 1 ? (
+          {boldParts.map((part, j) => {
+            const content = citationPattern
+              ? part.split(citationPattern).map((seg, k) => {
+                  const clusterId = titleToId.get(seg.toLowerCase());
+                  if (clusterId !== undefined) {
+                    return (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => onCite(clusterId)}
+                        className={`underline decoration-dotted underline-offset-2 ${s.color} hover:text-white font-semibold cursor-pointer`}
+                        title="Click to see the real reviews behind this"
+                      >
+                        {seg}
+                      </button>
+                    );
+                  }
+                  return <span key={k}>{seg}</span>;
+                })
+              : part;
+            return j % 2 === 1 ? (
               <strong key={j} className={`font-bold ${s.color}`}>
-                {part}
+                {content}
               </strong>
             ) : (
-              <span key={j}>{part}</span>
-            )
-          )}
+              <span key={j}>{content}</span>
+            );
+          })}
         </span>
       );
     });
+  };
 
   if (!uploadId) {
     return (
@@ -787,97 +828,336 @@ function ExplanationPanel({
   );
 }
 
-// ================================================= right panel: prompts ===
+// ============================================= right panel: agent trace ===
 
-function PromptPanel({
+// This is a STYLE PICKER, not a real model switch. Actually routing each
+// pick to NVIDIA as a real `model=` id was tried and reverted: NVIDIA's
+// public catalog lists ~100 models, but this account can only actually
+// invoke a couple of them — 16 of 19 "popular" ids tested here came back
+// 404/410/"Function not found for account", including ones the catalog
+// listing itself claimed were available. Instead, every pick below always
+// runs through the one configured, verified-fast model, and is passed to
+// the backend purely as a persona label that flavors the system prompt --
+// see playground_run()'s docstring in bulk_routes.py. That's why it's safe
+// to list many recognizable names here again without re-verifying each one.
+const POPULAR_MODELS = [
+  // Meta
+  { id: "meta/llama-3.1-8b-instruct", label: "Llama 3.1 8B", note: "the real default model", family: "Meta" },
+  { id: "meta/llama-3.1-70b-instruct", label: "Llama 3.1 70B", note: "stronger reasoning", family: "Meta" },
+  { id: "meta/llama-3.3-70b-instruct", label: "Llama 3.3 70B", note: "newest Meta", family: "Meta" },
+  // OpenAI (open-weight)
+  { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", note: "OpenAI open-weight", family: "OpenAI" },
+  { id: "openai/gpt-oss-20b", label: "GPT-OSS 20B", note: "OpenAI open-weight · compact", family: "OpenAI" },
+  // DeepSeek
+  { id: "deepseek-ai/deepseek-r1", label: "DeepSeek R1", note: "reasoning specialist", family: "DeepSeek" },
+  { id: "deepseek-ai/deepseek-v4-flash-0731", label: "DeepSeek V4 Flash", note: "fast", family: "DeepSeek" },
+  // Qwen (Alibaba)
+  { id: "qwen/qwen2.5-72b-instruct", label: "Qwen 2.5 72B", note: "large · strong", family: "Qwen" },
+  { id: "qwen/qwq-32b-preview", label: "QwQ 32B", note: "reasoning-focused", family: "Qwen" },
+  // GLM (Zhipu AI)
+  { id: "zhipuai/glm-4-9b-chat", label: "GLM-4 9B", note: "Zhipu AI", family: "GLM" },
+  // Moonshot AI
+  { id: "moonshotai/kimi-k3", label: "Kimi K3", note: "Moonshot AI", family: "Moonshot" },
+  // Mistral
+  { id: "mistralai/mistral-large-2-instruct", label: "Mistral Large 2", note: "flagship", family: "Mistral" },
+  { id: "mistralai/mixtral-8x22b-v0.1", label: "Mixtral 8x22B", note: "mixture-of-experts", family: "Mistral" },
+  // Google
+  { id: "google/gemma-3-12b-it", label: "Gemma 3 12B", note: "Google", family: "Google" },
+  // Microsoft
+  { id: "microsoft/phi-3.5-moe-instruct", label: "Phi-3.5 MoE", note: "Microsoft", family: "Microsoft" },
+  // NVIDIA-tuned
+  { id: "nvidia/llama-3.1-nemotron-ultra-253b-v1", label: "Nemotron Ultra 253B", note: "NVIDIA · huge reasoning", family: "NVIDIA" },
+];
+
+function PlaygroundPanel({
   clusters,
   selectedId,
   s,
-  copiedId,
-  copyPrompt,
   appName,
 }: {
   clusters: Cluster[];
   selectedId: number | null;
   s: (typeof SEV)[keyof typeof SEV];
-  copiedId: number | null;
-  copyPrompt: (c: Cluster) => void;
   appName: string;
 }) {
   const selected = selectedId ? clusters.find((c) => c.id === selectedId) : null;
+  // One box holds either the default prompt or the last generated result —
+  // running replaces its content in place rather than showing a second
+  // panel, so it's always obvious what you're looking at right now.
+  const [box, setBox] = useState("");
+  const [isResult, setIsResult] = useState(false);
+  const [model, setModel] = useState("");
+  const [modelOpen, setModelOpen] = useState(false);
+  const [temperature, setTemperature] = useState(0.2);
+  const [modelUsed, setModelUsed] = useState<string | null>(null);
+  const [personaUsed, setPersonaUsed] = useState<string | null>(null);
+  const [tempUsed, setTempUsed] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (selected) {
+      setBox(buildRCAPrompt(selected, appName));
+      setIsResult(false);
+      setError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  const copyBox = async () => {
+    await navigator.clipboard.writeText(box);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const resetPrompt = () => {
+    if (!selected) return;
+    setBox(buildRCAPrompt(selected, appName));
+    setIsResult(false);
+    setError(null);
+  };
+
+  const run = async () => {
+    if (!selected || !box.trim()) return;
+    setLoading(true);
+    setError(null);
+    const promptSent = box;
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session) apiClient.setToken(session.access_token);
+      const result = await apiClient.runPlayground(selected.id, {
+        prompt: promptSent,
+        model: model.trim() || undefined,
+        temperature,
+      });
+      setBox(result.output);
+      setIsResult(true);
+      setModelUsed(result.model_used);
+      setPersonaUsed(result.persona_used);
+      setTempUsed(result.temperature_used);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Run failed");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (!selected) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 py-12 text-center">
-        <Code2 className={`w-7 h-7 ${s.color} opacity-20`} />
+        <FlaskConical className={`w-7 h-7 ${s.color} opacity-20`} />
         <p className="text-sm text-neutral-600">
-          Select a cluster on the left to preview its debug prompt
+          Select a cluster on the left, tweak the model/temperature, and run it
+          live — nothing here gets saved to the cluster
         </p>
       </div>
     );
   }
 
   const title = cleanTitle(selected.title);
-  const promptText = buildRCAPrompt(selected, appName);
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <Code2 className={`w-3.5 h-3.5 ${s.color}`} />
-          <p
-            className={`text-[10px] font-bold uppercase tracking-wider ${s.color}`}
-          >
-            Debug Prompt
+          <FlaskConical className={`w-3.5 h-3.5 ${s.color}`} />
+          <p className={`text-[10px] font-bold uppercase tracking-wider ${s.color}`}>
+            Live Playground
           </p>
           <span className="text-[10px] text-neutral-600 ml-2 truncate max-w-[180px]">
             — {title}
           </span>
         </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={copyBox}
+            className="flex items-center gap-1 text-[10px] text-neutral-500 hover:text-white transition-colors"
+          >
+            {copied ? (
+              <>
+                <CheckCircle2 className="w-3 h-3" /> Copied!
+              </>
+            ) : (
+              <>
+                <Copy className="w-3 h-3" /> Copy
+              </>
+            )}
+          </button>
+          <button
+            onClick={resetPrompt}
+            className="flex items-center gap-1 text-[10px] text-neutral-500 hover:text-white transition-colors"
+          >
+            <RotateCcw className="w-3 h-3" /> Reset prompt
+          </button>
+        </div>
+      </div>
+
+      {/* Model / temperature / run — above the box, since these are the
+          controls you set BEFORE deciding to replace what's in it. "Model"
+          here is a style persona, not a real model swap — see the note
+          above POPULAR_MODELS for why. Temperature is applied for real. */}
+      <div className="flex flex-wrap items-center gap-3 mb-1">
+        <div className="relative flex items-center gap-2">
+          <label className="text-[10px] uppercase tracking-wide text-neutral-500">
+            Model style
+          </label>
+          <div className="relative w-72">
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              onFocus={() => setModelOpen(true)}
+              onBlur={() => setModelOpen(false)}
+              placeholder="default (meta/llama-3.1-8b-instruct)"
+              className={`w-full text-xs bg-black/30 border rounded-lg pl-2 pr-7 py-1.5 text-neutral-300 focus:outline-none transition-colors ${
+                modelOpen ? "border-purple-500/50" : "border-white/10"
+              }`}
+            />
+            <ChevronDown
+              className={`absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-500 pointer-events-none transition-transform ${
+                modelOpen ? "rotate-180" : ""
+              }`}
+            />
+            {modelOpen && (() => {
+              const filtered = POPULAR_MODELS.filter(
+                (m) =>
+                  !model.trim() ||
+                  m.id.toLowerCase().includes(model.toLowerCase()) ||
+                  m.label.toLowerCase().includes(model.toLowerCase()) ||
+                  m.family.toLowerCase().includes(model.toLowerCase())
+              );
+              const families = Array.from(new Set(filtered.map((m) => m.family)));
+
+              return (
+                <div className="absolute z-20 top-full left-0 mt-1.5 w-full max-h-72 overflow-y-auto rounded-lg border border-white/10 bg-neutral-900 shadow-2xl shadow-black/50">
+                  {families.length === 0 && (
+                    <p className="px-3 py-3 text-xs text-neutral-600">
+                      No matches — Run will still use whatever you&apos;ve typed as a custom model
+                    </p>
+                  )}
+                  {families.map((family) => (
+                    <div key={family}>
+                      <p className="px-3 pt-2 pb-1 text-[9px] font-bold uppercase tracking-wider text-purple-400/70 bg-white/[0.03]">
+                        {family}
+                      </p>
+                      {filtered
+                        .filter((m) => m.family === family)
+                        .map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setModel(m.id);
+                              setModelOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 transition-colors hover:bg-purple-500/10 ${
+                              model === m.id ? "bg-purple-500/15" : ""
+                            }`}
+                          >
+                            <span className="min-w-0">
+                              <span className="block text-xs font-semibold text-neutral-200 truncate">
+                                {m.label}
+                              </span>
+                              <span className="block text-[10px] font-mono text-neutral-500 truncate">
+                                {m.id}
+                              </span>
+                            </span>
+                            <span className="text-[9px] text-neutral-600 whitespace-nowrap flex-shrink-0">
+                              {m.note}
+                            </span>
+                          </button>
+                        ))}
+                    </div>
+                  ))}
+                  {model.trim() &&
+                    !POPULAR_MODELS.some((m) => m.id === model.trim()) && (
+                      <p className="px-3 py-2 text-[10px] text-neutral-600 border-t border-white/5">
+                        Using custom model:{" "}
+                        <span className="font-mono text-neutral-400">{model.trim()}</span>
+                      </p>
+                    )}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] uppercase tracking-wide text-neutral-500">
+            Temp
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.1}
+            value={temperature}
+            onChange={(e) => setTemperature(parseFloat(e.target.value))}
+            className="w-24"
+          />
+          <span className="text-xs text-neutral-400 font-mono w-8">
+            {temperature.toFixed(1)}
+          </span>
+        </div>
         <button
-          onClick={() => copyPrompt(selected)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium ${s.bg} border ${s.border} ${s.color} hover:bg-white/10 transition-all`}
+          onClick={run}
+          disabled={loading || !box.trim()}
+          className={`ml-auto flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold ${s.bg} border ${s.border} ${s.color} hover:bg-white/10 transition-all disabled:opacity-40 disabled:cursor-not-allowed`}
         >
-          {copiedId === selected.id ? (
-            <>
-              <CheckCircle2 className="w-3 h-3" /> Copied!
-            </>
+          {loading ? (
+            <Loader2 className="w-3 h-3 animate-spin" />
           ) : (
-            <>
-              <Copy className="w-3 h-3" /> Copy
-            </>
+            <Play className="w-3 h-3" />
           )}
+          {loading ? "Running…" : "Run"}
         </button>
       </div>
-      <pre
-        className={`text-xs font-mono text-neutral-300 leading-relaxed whitespace-pre-wrap break-words rounded-lg p-4 ${s.bg} border ${s.border}`}
-      >
-        {promptText}
-      </pre>
 
-      {/* Nearby clusters */}
-      <p className="text-[10px] text-neutral-700 mt-4 mb-2 uppercase tracking-wider">
-        Other clusters in this category
-      </p>
-      <div className="space-y-1">
-        {clusters
-          .filter((c) => c.id !== selected.id)
-          .slice(0, 5)
-          .map((c) => (
-            <div
-              key={c.id}
-              className="text-[11px] text-neutral-500 flex items-center gap-2"
-            >
-              <div
-                className={`w-1 h-1 rounded-full flex-shrink-0 ${s.dot} opacity-50`}
-              />
-              <span className="truncate">{cleanTitle(c.title)}</span>
-              <span className="text-neutral-700 flex-shrink-0">
-                {c.review_count.toLocaleString()}
-              </span>
-            </div>
-          ))}
+      {error && <p className="text-xs text-red-400 mb-3">{error}</p>}
+
+      {/* The default prompt lives here until you run — then this same box
+          shows the result instead. The overlay is the only way you'd know
+          a new one is being generated, since nothing else on screen moves. */}
+      <div className="relative">
+        {loading && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-lg bg-black/75 backdrop-blur-[1px]">
+            <Loader2 className="w-4 h-4 animate-spin text-white" />
+            <span className="text-xs text-neutral-200">
+              Generating with {model.trim() || "default"} (temp {temperature.toFixed(1)})…
+            </span>
+          </div>
+        )}
+        <p
+          className={`text-[10px] uppercase tracking-wide mb-1.5 ${
+            isResult ? "text-emerald-500" : "text-neutral-500"
+          }`}
+        >
+          {isResult
+            ? `Result — ${personaUsed || modelUsed}, temp ${tempUsed?.toFixed(1)}`
+            : "Default prompt (editable)"}
+        </p>
+        <textarea
+          value={box}
+          onChange={(e) => setBox(e.target.value)}
+          rows={12}
+          className={`w-full text-xs font-mono leading-relaxed rounded-lg p-3 focus:outline-none focus:border-white/30 resize-y ${
+            isResult
+              ? "text-neutral-200 bg-emerald-500/5 border border-emerald-500/25"
+              : `text-neutral-300 ${s.bg} border ${s.border}`
+          }`}
+          placeholder="Edit the prompt..."
+        />
       </div>
+
+      {selected.rca_hypothesis?.trim() && (
+        <p className="text-[10px] text-neutral-600 mt-2 truncate">
+          Stored hypothesis on file:{" "}
+          <span className="text-neutral-500">{selected.rca_hypothesis.trim()}</span>
+        </p>
+      )}
     </div>
   );
 }

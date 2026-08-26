@@ -60,6 +60,16 @@ class Cluster(SQLModel, table=True):
     keywords: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
     sample_reviews: Optional[List[Dict[str, Any]]] = Field(default=None, sa_column=Column(JSON))
     review_count: int = Field(default=0)
+
+    # Structured output from the LangGraph RCA agent — set by
+    # explanation_pregenerate.py alongside rca_hypothesis/rca_steps/rca_fix.
+    # Kept separate (rather than parsed out of the markdown text) so the
+    # frontend can render real badges/meters instead of regexing prose.
+    # Shape: {likelihood, scope, suggested_severity, severity_reason,
+    #         confidence, similar_issues: [{title, severity, status}],
+    #         eval_scores: {faithfulness, answer_relevancy}, trace_id,
+    #         agent_steps: [str]}
+    ai_metadata: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
     assigned_to: Optional[str] = Field(default=None)
     assigned_at: Optional[datetime] = Field(default=None)
 

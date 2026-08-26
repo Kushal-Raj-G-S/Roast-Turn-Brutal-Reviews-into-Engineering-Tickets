@@ -84,6 +84,7 @@ class ClusterDetailResponse(BaseModel):
     affected_devices: Optional[list[str]] = None
     keywords: Optional[list[str]] = None
     sample_reviews: Optional[list[dict]] = None
+    ai_metadata: Optional[dict] = None
     created_at: str
 
 
@@ -516,6 +517,67 @@ Rules: Every sentence must be traceable to at least one review above. Do not inv
     )
 
 
+class PlaygroundRequest(BaseModel):
+    """Ad-hoc LLM experimentation request — never persisted to the cluster."""
+    prompt: str
+    model: Optional[str] = None
+    temperature: Optional[float] = 0.2
+    max_tokens: Optional[int] = 600
+
+
+class PlaygroundResponse(BaseModel):
+    output: str
+    model_used: str
+    persona_used: Optional[str] = None
+    temperature_used: float
+
+
+@router.post("/clusters/{cluster_id}/playground", response_model=PlaygroundResponse)
+async def playground_run(
+    cluster_id: int,
+    payload: PlaygroundRequest,
+    session: Session = Depends(get_db_session)
+):
+    """
+    Live prompt experimentation for the AI Debug Center. Always calls the
+    one configured, verified-fast NVIDIA model (never `payload.model`
+    directly) -- most model ids on NVIDIA's public catalog aren't actually
+    invokable on every account/key, and routing real requests to a picked
+    id meant every "model swap" risked a 404/410 or a long hang instead of
+    an answer. `payload.model` is instead passed through as a style persona
+    that flavors the system prompt, so picking a different "model" still
+    changes the output's voice without the reliability cost. Temperature is
+    applied for real. Nothing here is written back to the cluster's stored
+    rca_hypothesis/ai_metadata, so it's safe to experiment freely.
+    """
+    cluster = session.get(Cluster, cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    if not payload.prompt or not payload.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+
+    temperature = 0.2 if payload.temperature is None else max(0.0, min(1.0, payload.temperature))
+    max_tokens = max(1, min(payload.max_tokens or 600, 1000))
+    persona = payload.model.strip() if payload.model and payload.model.strip() else None
+
+    from app.services.llm_service import get_llm_service
+    llm = get_llm_service()
+    output = await llm.generate(
+        payload.prompt,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        persona_label=persona,
+    )
+
+    return PlaygroundResponse(
+        output=output.strip(),
+        model_used=llm.model,
+        persona_used=persona,
+        temperature_used=temperature,
+    )
+
+
 @router.get("/clusters/{cluster_id}", response_model=ClusterDetailResponse)
 async def get_cluster_details(
     cluster_id: int,
@@ -552,6 +614,7 @@ async def get_cluster_details(
             affected_devices=cluster.affected_devices or [],
             keywords=cluster.keywords or [],
             sample_reviews=cluster.sample_reviews or [],
+            ai_metadata=cluster.ai_metadata,
             created_at=cluster.created_at.isoformat()
         )
         

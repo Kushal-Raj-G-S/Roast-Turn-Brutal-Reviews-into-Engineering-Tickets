@@ -5,15 +5,20 @@ Loads settings from environment variables with sensible defaults.
 
 import os
 from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class Config:
     """Configuration for bulk review processing."""
     
     # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql://postgres.ouxdpbbmvazmtaxeueko:roastgooglereviewproject@aws-1-ap-south-1.pooler.supabase.com:5432/postgres"
-    )
+    DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL")
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL environment variable is not set. "
+            "Set it in your .env file (see README.md)."
+        )
     
     # Embedding model
     MODEL_NAME: str = os.getenv(

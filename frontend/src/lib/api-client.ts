@@ -69,12 +69,36 @@ export interface Cluster {
   created_at: string;
 }
 
+export interface AgentSimilarIssue {
+  cluster_id: number;
+  title: string;
+  severity: string;
+  status: string;
+}
+
+export interface AgentMetadata {
+  likelihood: string;
+  scope: string;
+  suggested_severity: string;
+  severity_reason: string;
+  confidence: number;
+  similar_issues: AgentSimilarIssue[];
+  eval_scores?: {
+    faithfulness: number;
+    answer_relevancy: number;
+    reasoning?: string | null;
+  } | null;
+  trace_id?: string;
+  agent_steps: string[];
+}
+
 export interface ClusterDetail extends Cluster {
   rca_title?: string;
   rca_hypothesis?: string;
   rca_steps?: string;
   rca_fix?: string;
   ai_analyzed?: boolean;
+  ai_metadata?: AgentMetadata | null;
   affected_versions?: string[];
   affected_devices?: string[];
   keywords?: string[];
@@ -302,6 +326,28 @@ class APIClient {
 
     if (!response.ok) {
       throw new Error('Failed to get cluster details');
+    }
+
+    return response.json();
+  }
+
+  // Ad-hoc prompt experimentation — ephemeral, nothing here is persisted.
+  // `payload.model` is a style persona, not a real model swap (see backend
+  // playground_run docstring) — `model_used` in the response is the real
+  // model that actually ran, `persona_used` is what you picked.
+  async runPlayground(
+    clusterId: number,
+    payload: { prompt: string; model?: string; temperature?: number; max_tokens?: number }
+  ): Promise<{ output: string; model_used: string; persona_used: string | null; temperature_used: number }> {
+    const response = await fetch(`${this.baseURL}/clusters/${clusterId}/playground`, {
+      method: 'POST',
+      headers: this.getHeaders(true),
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Playground run failed');
     }
 
     return response.json();

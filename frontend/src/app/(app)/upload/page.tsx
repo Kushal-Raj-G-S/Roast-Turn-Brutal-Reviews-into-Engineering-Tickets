@@ -55,18 +55,31 @@ export default function UploadPage() {
   useEffect(() => {
     if (!uploadId || !isUploading) return;
 
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 10; // ~20s of failures before giving up
+
     const pollProgress = async () => {
       try {
+        // Long jobs (200k+ reviews) can outlive the access token's 1hr
+        // lifetime — refresh it before every poll so the token used here
+        // never goes stale mid-job (getSession() refreshes if needed).
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          throw new Error("Session expired and could not be refreshed");
+        }
+        apiClient.setToken(session.access_token);
+
         const progressData = await apiClient.getUploadProgress(uploadId);
-        
+        consecutiveFailures = 0;
+
         if (progressData) {
           setProgress(progressData);
-          
+
           // Stop polling if completed or failed
           if (progressData.status === 'completed') {
             clearInterval(pollInterval.current!);
             setIsUploading(false);
-            
+
             // Immediately redirect to analytics page without showing success screen
             router.push(`/analytics?upload_id=${uploadId}`);
           } else if (progressData.status === 'failed') {
@@ -80,6 +93,17 @@ export default function UploadPage() {
         }
       } catch (error) {
         console.error('Error polling progress:', error);
+        consecutiveFailures++;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          // Session truly can't be refreshed (e.g. logged out elsewhere) —
+          // stop hammering the backend. The job itself keeps running
+          // server-side regardless; this only stops the UI's progress poll.
+          clearInterval(pollInterval.current!);
+          console.warn(
+            `Progress polling stopped after ${MAX_CONSECUTIVE_FAILURES} consecutive failures. ` +
+            "The upload is still processing in the background — reload this page to resume tracking it."
+          );
+        }
       }
     };
 

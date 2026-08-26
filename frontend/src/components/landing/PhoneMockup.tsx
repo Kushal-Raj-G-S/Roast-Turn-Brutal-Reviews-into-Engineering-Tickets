@@ -14,8 +14,8 @@
  * Side content explains: Reviews → Engineering Tickets
  */
 
-import { useRef, useState, useEffect } from "react";
-import { motion, useScroll, useTransform, useMotionValue } from "framer-motion";
+import { useRef, useState, useEffect, useMemo } from "react";
+import { motion, useScroll, useTransform, useMotionValue, useSpring, useVelocity } from "framer-motion";
 
 // ============================================================================
 // PARTICLE FIELD - Subtle ambient depth
@@ -74,17 +74,27 @@ function ParticleField() {
 // ============================================================================
 // SCROLL PHASES
 // ============================================================================
+// Phase boundaries are computed at runtime (see buildPhases below) from the
+// *actual* rendered height of the Play Store content, so the pinned scroll
+// section always ends exactly when the content finishes revealing — no
+// leftover "dead scroll" and nothing gets cut off if the content changes.
 
-const PHASE = {
-  LOCK_START: 0.0,
-  LOCK_END: 0.25,
+const LOCK_PX = 900; // scroll budget (px) for the lock-screen phase
+const UNLOCK_PX = 500; // scroll budget (px) for the unlock → Play Store transition
+const END_HOLD_PX = 250; // small pause once the final screen is fully revealed
 
-  UNLOCK_START: 0.25,
-  UNLOCK_END: 0.4,
-
-  SCROLL_START: 0.35,
-  SCROLL_END: 1.0,
-} as const;
+function buildPhases(totalPx: number) {
+  const lockEnd = LOCK_PX / totalPx;
+  const unlockEnd = (LOCK_PX + UNLOCK_PX) / totalPx;
+  return {
+    LOCK_START: 0,
+    LOCK_END: lockEnd,
+    UNLOCK_START: lockEnd,
+    UNLOCK_END: unlockEnd,
+    SCROLL_START: unlockEnd,
+    SCROLL_END: 1,
+  } as const;
+}
 
 // ============================================================================
 // PHONE DIMENSIONS
@@ -376,35 +386,63 @@ function ReviewCard({ review, scrollProgress }: { review: typeof REVIEWS[0]; scr
 
 function PlayStoreContent({ scrollY, scrollProgress }: { scrollY: number; scrollProgress: number }) {
   return (
-    <div 
-      className="absolute inset-x-0 top-0 flex flex-col bg-[#0a0a0a] p-4 pt-8"
-      style={{ transform: `translateY(${scrollY}px)` }}
+    <div
+      className="flex flex-col bg-[#0a0a0a] p-4 pt-8"
     >
       {/* Status Bar */}
-      <div className="flex items-center justify-between text-[9px] text-neutral-500 mb-3">
-        <motion.span 
+      <div className="flex items-center justify-between text-[9px] text-white mb-3">
+        <motion.span
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="font-medium"
+          className="font-semibold tabular-nums"
         >
           9:41
         </motion.span>
-        <div className="flex items-center gap-1.5">
-          <div className="flex gap-0.5">
-            <motion.div initial={{ height: 0 }} animate={{ height: 6 }} transition={{ delay: 0.1 }} className="w-1 h-1.5 bg-neutral-500 rounded-sm" />
-            <motion.div initial={{ height: 0 }} animate={{ height: 8 }} transition={{ delay: 0.15 }} className="w-1 h-2 bg-neutral-500 rounded-sm" />
-            <motion.div initial={{ height: 0 }} animate={{ height: 10 }} transition={{ delay: 0.2 }} className="w-1 h-2.5 bg-neutral-500 rounded-sm" />
-            <motion.div initial={{ height: 0 }} animate={{ height: 12 }} transition={{ delay: 0.25 }} className="w-1 h-3 bg-neutral-400 rounded-sm" />
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.1 }}
+          className="flex items-center gap-1.5"
+        >
+          {/* Cellular signal — 4 ascending bars */}
+          <svg width="16" height="11" viewBox="0 0 16 11" fill="none" aria-hidden>
+            <rect x="0" y="7" width="3" height="4" rx="0.6" fill="currentColor" />
+            <rect x="4.3" y="5" width="3" height="6" rx="0.6" fill="currentColor" />
+            <rect x="8.6" y="3" width="3" height="8" rx="0.6" fill="currentColor" />
+            <rect x="13" y="0" width="3" height="11" rx="0.6" fill="currentColor" />
+          </svg>
+
+          {/* Wi-Fi */}
+          <svg width="14" height="11" viewBox="0 0 14 11" fill="none" aria-hidden>
+            <path
+              d="M7 9.3a1.1 1.1 0 100 2.2 1.1 1.1 0 000-2.2z"
+              fill="currentColor"
+            />
+            <path
+              d="M3.6 6.7a5 5 0 016.8 0"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              fill="none"
+            />
+            <path
+              d="M1 3.9a9 9 0 0112 0"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              fill="none"
+              opacity="0.9"
+            />
+          </svg>
+
+          {/* Battery */}
+          <div className="flex items-center">
+            <div className="w-5 h-2.5 border border-white/70 rounded-[3px] relative p-[1px]">
+              <div className="h-full bg-white rounded-[1px]" style={{ width: '82%' }} />
+            </div>
+            <div className="w-[1.5px] h-1 bg-white/70 rounded-r-sm ml-[1px]" />
           </div>
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.5 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.3 }}
-            className="w-5 h-2 border border-neutral-500 rounded-sm relative"
-          >
-            <div className="absolute inset-0.5 right-0.5 bg-green-500 rounded-[1px]" />
-          </motion.div>
-        </div>
+        </motion.div>
       </div>
 
       {/* App Header - Random App "FitTracker Pro" */}
@@ -1009,15 +1047,100 @@ function PlayStoreContent({ scrollY, scrollProgress }: { scrollY: number; scroll
 // MAIN COMPONENT
 // ============================================================================
 
+// Height of the phone's visible screen area — matches the CSS
+// `calc(100% - 40px)` applied to the screen container below.
+const PHONE_SCREEN_HEIGHT = PHONE.HEIGHT - 40;
+const FALLBACK_CONTENT_HEIGHT = 4300; // used until the real content is measured
+
 export function PhoneMockup() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const [isScrolling, setIsScrolling] = useState(false);
   const scrollTimeout = useRef<NodeJS.Timeout | null>(null);
+  const [contentHeight, setContentHeight] = useState(FALLBACK_CONTENT_HEIGHT);
+  const [viewportHeight, setViewportHeight] = useState(900);
 
-  const { scrollYProgress } = useScroll({
+  // Measure the actual rendered height of the scrolling Play Store content so
+  // the pinned section's scroll length always matches exactly — no dead
+  // scroll space, nothing cut off at the bottom, regardless of how much
+  // content (reviews, cards, images) is in there.
+  useEffect(() => {
+    if (!contentRef.current) return;
+    const measure = () => {
+      const h = contentRef.current?.scrollHeight;
+      if (h && h > 0) setContentHeight(h);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(contentRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const updateViewport = () => setViewportHeight(window.innerHeight);
+    updateViewport();
+    window.addEventListener('resize', updateViewport);
+    return () => window.removeEventListener('resize', updateViewport);
+  }, []);
+
+  const SCROLL_DISTANCE = Math.max(contentHeight - PHONE_SCREEN_HEIGHT, 400);
+  const TOTAL_SCROLL_PX = LOCK_PX + UNLOCK_PX + SCROLL_DISTANCE + END_HOLD_PX;
+  const PHASE = useMemo(() => buildPhases(TOTAL_SCROLL_PX), [TOTAL_SCROLL_PX]);
+  const sectionHeight = TOTAL_SCROLL_PX + viewportHeight;
+
+  const { scrollYProgress: rawScrollYProgress } = useScroll({
     target: containerRef,
     offset: ["start start", "end end"],
   });
+
+  // Spring-smooth the raw scroll progress so the whole sequence feels like a
+  // physical, weighted motion instead of snapping 1:1 with wheel/touch deltas.
+  const scrollYProgress = useSpring(rawScrollYProgress, {
+    stiffness: 300,
+    damping: 40,
+    mass: 0.4,
+  });
+
+  // ==========================================================================
+  // PREMIUM INTERACTION 1: Scroll-velocity motion blur
+  // Fast scrolling blurs the phone slightly, like a camera whip-pan; it
+  // sharpens back up the moment scrolling settles. This is the signature
+  // "weighted" feel of high-end scrollytelling sites.
+  // ==========================================================================
+  const scrollVelocity = useVelocity(scrollYProgress);
+  const smoothVelocity = useSpring(scrollVelocity, { stiffness: 300, damping: 40 });
+  const scrollBlur = useTransform(smoothVelocity, (v) => {
+    const px = Math.min(Math.abs(v) * 6, 7);
+    return `blur(${px.toFixed(2)}px)`;
+  });
+
+  // ==========================================================================
+  // PREMIUM INTERACTION 2: Cursor-reactive 3D tilt
+  // The phone subtly tilts toward the pointer, like it's a physical object
+  // sitting under a light source — a common Apple-style product-page touch.
+  // ==========================================================================
+  const pointerX = useMotionValue(0);
+  const pointerY = useMotionValue(0);
+  const tiltRotateX = useSpring(useTransform(pointerY, [-0.5, 0.5], [10, -10]), {
+    stiffness: 150,
+    damping: 20,
+    mass: 0.5,
+  });
+  const tiltRotateY = useSpring(useTransform(pointerX, [-0.5, 0.5], [-10, 10]), {
+    stiffness: 150,
+    damping: 20,
+    mass: 0.5,
+  });
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    pointerX.set((e.clientX - rect.left) / rect.width - 0.5);
+    pointerY.set((e.clientY - rect.top) / rect.height - 0.5);
+  };
+  const handlePointerLeave = () => {
+    pointerX.set(0);
+    pointerY.set(0);
+  };
 
   // Track scrolling state to pause floating animation
   useEffect(() => {
@@ -1066,7 +1189,7 @@ export function PhoneMockup() {
   );
 
   // ==========================================================================
-  // PHASE 1: LOCK SCREEN (0.0 → 0.2)
+  // PHASE 1: LOCK SCREEN
   // ==========================================================================
 
   const lockOpacity = useTransform(
@@ -1075,14 +1198,29 @@ export function PhoneMockup() {
     [1, 1, 0]
   );
 
+  // Swipe-up-to-unlock: the whole lock screen slides upward and defocuses,
+  // like it's being physically swiped away, instead of just fading out.
+  const lockY = useTransform(
+    scrollYProgress,
+    [PHASE.LOCK_END - 0.12, PHASE.LOCK_END],
+    [0, -140]
+  );
+
   const lockScale = useTransform(
     scrollYProgress,
     [PHASE.LOCK_END - 0.1, PHASE.LOCK_END],
-    [1, 1.1]
+    [1, 1.06]
   );
 
+  const lockBlurPx = useTransform(
+    scrollYProgress,
+    [PHASE.LOCK_END - 0.1, PHASE.LOCK_END],
+    [0, 6]
+  );
+  const lockFilter = useTransform(lockBlurPx, (v) => `blur(${v.toFixed(1)}px)`);
+
   // ==========================================================================
-  // PHASE 2: UNLOCK → PLAY STORE (0.2 → 0.35)
+  // PHASE 2: UNLOCK → PLAY STORE
   // ==========================================================================
 
   const storeOpacity = useTransform(
@@ -1098,10 +1236,9 @@ export function PhoneMockup() {
   );
 
   // ==========================================================================
-  // PHASE 3: PLAY STORE SCROLLS (0.35 → 1.0)
+  // PHASE 3: PLAY STORE SCROLLS — distance is derived from the measured
+  // content height above, so it always lines up with SCROLL_END exactly.
   // ==========================================================================
-
-  const SCROLL_DISTANCE = 3400;
 
   const storeScrollY = useTransform(
     scrollYProgress,
@@ -1135,10 +1272,19 @@ export function PhoneMockup() {
   // ==========================================================================
 
   return (
-    <section ref={containerRef} className="relative h-[800vh]">
+    <section
+      ref={containerRef}
+      className="relative"
+      style={{ height: `${sectionHeight}px` }}
+    >
       {/* Sticky Container - Below Navbar */}
-      <div className="sticky top-20 h-[calc(100vh-5rem)] flex items-center justify-center overflow-hidden px-4">
-        
+      <div
+        className="sticky top-20 h-[calc(100vh-5rem)] flex items-center justify-center overflow-hidden px-4"
+        style={{ perspective: 1400 }}
+        onPointerMove={handlePointerMove}
+        onPointerLeave={handlePointerLeave}
+      >
+
         {/* ================================================================ */}
         {/* LAYERED DEPTH BACKGROUND */}
         {/* ================================================================ */}
@@ -1192,13 +1338,20 @@ export function PhoneMockup() {
         {/* ================================================================ */}
         {/* PHONE SHELL - PREMIUM CSS FRAME */}
         {/* ================================================================ */}
+        {/* Outer wrapper owns the idle CSS float bob — kept on its own element
+            because a running CSS animation on `transform` overrides any
+            inline/Framer `transform` set on that same element. */}
+        <div className={`relative z-10 phone-float ${isScrolling ? 'phone-float-paused' : ''}`}>
         <motion.div
-          className={`relative z-10 phone-float ${isScrolling ? 'phone-float-paused' : ''}`}
           style={{
             width: PHONE.WIDTH,
             height: PHONE.HEIGHT,
             scale: phoneScale,
-            willChange: "transform",
+            rotateX: tiltRotateX,
+            rotateY: tiltRotateY,
+            filter: scrollBlur,
+            transformStyle: "preserve-3d",
+            willChange: "transform, filter",
             isolation: "isolate",
           }}
         >
@@ -1220,30 +1373,42 @@ export function PhoneMockup() {
               padding: '12px',
             }}
           >
-            {/* Camera Notch */}
+            {/* Dynamic Island */}
             <div style={{
               position: 'absolute',
-              top: '14px',
+              top: '16px',
               left: '50%',
               transform: 'translateX(-50%)',
-              width: '90px',
-              height: '28px',
-              background: '#000',
-              borderRadius: '20px',
+              width: '104px',
+              height: '30px',
+              background: 'linear-gradient(180deg, #050505 0%, #000 100%)',
+              borderRadius: '999px',
               zIndex: 10,
-              boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)'
+              boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.05), inset 0 1px 2px rgba(255,255,255,0.04), 0 2px 6px rgba(0,0,0,0.6)'
             }}>
               {/* Camera Lens */}
               <div style={{
                 position: 'absolute',
-                right: '18px',
+                right: '9px',
                 top: '50%',
                 transform: 'translateY(-50%)',
-                width: '8px',
-                height: '8px',
+                width: '9px',
+                height: '9px',
                 borderRadius: '50%',
-                background: '#1a1a2e',
-                boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.1), 0 0 4px rgba(100,150,255,0.2)'
+                background: 'radial-gradient(circle at 35% 35%, #2a3a5e, #0a0e1a 70%)',
+                boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.1), 0 0 4px rgba(100,150,255,0.25)'
+              }} />
+              {/* Sensor dot */}
+              <div style={{
+                position: 'absolute',
+                right: '26px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: '4px',
+                height: '4px',
+                borderRadius: '50%',
+                background: '#111',
+                boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)'
               }} />
             </div>
 
@@ -1288,9 +1453,11 @@ export function PhoneMockup() {
               {/* Layer 1: Lock Screen */}
               <motion.div
                 className="absolute inset-0"
-                style={{ 
+                style={{
                   opacity: lockOpacity,
                   scale: lockScale,
+                  y: lockY,
+                  filter: lockFilter,
                   pointerEvents: 'none'
                 }}
               >
@@ -1307,6 +1474,7 @@ export function PhoneMockup() {
                 }}
               >
                 <motion.div
+                  ref={contentRef}
                   className="absolute inset-x-0 top-0"
                   style={{ y: storeScrollY }}
                 >
@@ -1371,6 +1539,7 @@ export function PhoneMockup() {
             </div>
           </div>
         </motion.div>
+        </div>
       </div>
     </section>
   );

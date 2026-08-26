@@ -9,7 +9,8 @@
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { useState } from "react";
-import { Mail, Lock, ArrowRight, Chrome, Github, Loader2, AlertCircle } from "lucide-react";
+import { Mail, Lock, ArrowRight, Loader2, AlertCircle } from "lucide-react";
+import { GoogleIcon, GithubIcon } from "@/components/ui/BrandIcons";
 import { supabase } from "@/lib/supabase/client";
 
 export default function LoginPage() {
@@ -129,7 +130,7 @@ export default function LoginPage() {
             disabled={isLoading}
             className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white font-medium hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Chrome className="w-5 h-5" />
+            <GoogleIcon className="w-5 h-5" />
             Continue with Google
           </button>
           <button 
@@ -137,7 +138,7 @@ export default function LoginPage() {
             disabled={isLoading}
             className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white font-medium hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Github className="w-5 h-5" />
+            <GithubIcon className="w-5 h-5" />
             Continue with GitHub
           </button>
         </div>

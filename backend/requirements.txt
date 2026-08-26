@@ -2,40 +2,56 @@
 # ==========================
 
 # Core Framework
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
+fastapi>=0.141.0
+uvicorn[standard]>=0.52.0
+pydantic>=2.13.0
+pydantic-settings>=2.15.0
 
 # Async Support
-httpx>=0.26.0
-python-multipart>=0.0.6
+httpx>=0.28.0
+python-multipart>=0.0.32
+# Pinned <3.0 — instructor/langchain-openai don't support the openai 3.x line yet.
+openai>=2.54.0,<3.0.0
 
 # Data Processing
-pandas>=2.1.0
-numpy>=1.26.0
+pandas>=3.0.0
+numpy>=2.5.0
 
-# Vector Store & Embeddings
-chromadb>=0.4.22
-# sentence-transformers / torch removed — HF Inference API used for embeddings on prod;
-# sklearn TF-IDF+SVD used as zero-torch fallback for local dev
+# Embeddings — free, open-source, local (no API key, no per-request cost)
+# Tier-0: sentence-transformers (real transformer embeddings, CPU-only build)
+# Tier-1: HuggingFace Inference API fallback (if HUGGINGFACE_API_KEY is set)
+# Tier-2: sklearn TF-IDF+SVD fallback (if neither of the above is available)
+sentence-transformers>=5.1.0
+torch>=2.9.0
+optimum[onnxruntime]>=1.23.0   # ONNX int8-quantized inference — ~20-25% faster embedding on CPU than plain torch, verified by benchmark
+
+# Agentic RCA stack — all free / open-source, no paid API required
+langgraph>=1.2.11              # multi-step agent orchestration (investigate -> retrieve -> hypothesize -> critique -> finalize)
+qdrant-client>=1.19.0          # embedded (on-disk) vector store — no server to run
+rank_bm25>=0.2.2               # sparse/keyword retrieval, fused with dense search via RRF
+instructor>=1.15.4             # validated structured LLM outputs (Pydantic + function-calling)
+langfuse>=4.14.0               # LLM observability/tracing (free cloud tier or self-hosted; falls back to a local JSONL trace log if unset)
+ragas>=0.4.3                   # RAG evaluation — scores generated RCA for faithfulness / answer relevancy
+# ragas needs a langchain-community version that still ships the legacy
+# chat_models compat shims it imports; 0.4.2 dropped them, so pin to 0.4.1.
+langchain-community==0.4.1
 
 # Utilities
-python-dotenv>=1.0.0
-psutil>=5.9.0           # System resource monitoring (CPU/memory tracking)
+python-dotenv>=1.2.0
+psutil>=7.2.0           # System resource monitoring (CPU/memory tracking)
 
 # Database (PostgreSQL + ORM)
-sqlalchemy>=2.0.0
-psycopg2-binary>=2.9.9
-asyncpg>=0.29.0
-alembic>=1.13.0
-sqlmodel>=0.0.14  # SQLModel for type-safe ORM with Pydantic
+sqlalchemy>=2.0.52
+psycopg2-binary>=2.9.12
+asyncpg>=0.31.0
+alembic>=1.19.0
+sqlmodel>=0.0.39  # SQLModel for type-safe ORM with Pydantic
 
 # ML/Clustering
-scikit-learn>=1.3.0  # For NearestNeighbors clustering
-faiss-cpu>=1.7.4     # Facebook AI Similarity Search (CPU build)
+scikit-learn>=1.9.0  # For NearestNeighbors clustering
+faiss-cpu>=1.15.0    # Facebook AI Similarity Search (CPU build)
 
 # Authentication & Security
-supabase>=2.0.0
-python-multipart>=0.0.6
-email-validator>=2.1.0
+supabase>=2.31.0
+python-multipart>=0.0.32
+email-validator>=2.3.0

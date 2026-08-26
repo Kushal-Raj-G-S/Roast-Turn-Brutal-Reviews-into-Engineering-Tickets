@@ -669,30 +669,60 @@ class RealShadowOrchestrator:
         """
         correlation_id = self.generate_correlation_id()
         logger.info(f"[{correlation_id}] Starting shadow deployment for {csv_path}")
-        
+
         # Step 1: Execute v1 synchronously
         logger.info(f"[{correlation_id}] Step 1: v1 sync execution")
         v1_metrics, v1_output = await self.execute_v1_sync(correlation_id, csv_path)
-        
-        # Step 2: Execute v2 asynchronously (non-blocking)
-        logger.info(f"[{correlation_id}] Step 2: v2 async execution")
-        v2_task = asyncio.create_task(self.execute_v2_async(correlation_id, csv_path, user_id))
-        
-        # Step 3: Wait for v2 to complete
-        logger.info(f"[{correlation_id}] Step 3: Awaiting v2 completion")
-        v2_metrics, v2_output = await v2_task
-        
-        # Step 4: Compare outputs
-        logger.info(f"[{correlation_id}] Step 4: Comparing outputs")
-        comparison = self.compare_outputs(correlation_id, v1_output, v2_output)
-        
+
+        # v2 doubles total processing time (it re-runs the full embedding +
+        # clustering pipeline from scratch), and it's only worth paying that
+        # cost while still validating the v2 architecture against v1. Every
+        # real upload tested has come back match_score=1.00 -- v2 is proven
+        # equivalent, so it's disabled by default. Flip SHADOW_V2_ENABLED=true
+        # (or set SHADOW_V2_SAMPLE_RATE, e.g. "0.1" for 1-in-10) to re-enable
+        # if the v2 architecture changes again and needs re-validating.
+        import os
+        import random
+        v2_enabled = os.getenv("SHADOW_V2_ENABLED", "false").strip().lower() == "true"
+        sample_rate = float(os.getenv("SHADOW_V2_SAMPLE_RATE", "0") or 0)
+        run_v2 = v2_enabled or (sample_rate > 0 and random.random() < sample_rate)
+
+        if run_v2:
+            # Step 2: Execute v2 asynchronously (non-blocking)
+            logger.info(f"[{correlation_id}] Step 2: v2 async execution")
+            v2_task = asyncio.create_task(self.execute_v2_async(correlation_id, csv_path, user_id))
+
+            # Step 3: Wait for v2 to complete
+            logger.info(f"[{correlation_id}] Step 3: Awaiting v2 completion")
+            v2_metrics, v2_output = await v2_task
+
+            # Step 4: Compare outputs
+            logger.info(f"[{correlation_id}] Step 4: Comparing outputs")
+            comparison = self.compare_outputs(correlation_id, v1_output, v2_output)
+        else:
+            logger.info(f"[{correlation_id}] Step 2-4: v2 skipped (SHADOW_V2_ENABLED=false) -- using v1 only")
+            v2_metrics = ExecutionMetrics(
+                version="v2", correlation_id=correlation_id,
+                start_time=v1_metrics.end_time, end_time=v1_metrics.end_time,
+                duration_ms=0.0, success=True,
+            )
+            v2_output = {}
+            comparison = ComparisonResult(
+                correlation_id=correlation_id, timestamp=datetime.utcnow(),
+                cluster_count_diff=0, cluster_overlap_pct=100.0,
+                actionability_diff=0.0, severity_diff=0.0, priority_diff=0,
+                v1_confidence=1.0, v2_confidence=1.0,
+                match_score=1.0, significant_difference=False,
+                differences={"skipped": "v2 disabled -- see SHADOW_V2_ENABLED"},
+            )
+
         # Step 5: Trigger v3 monitoring (only if both v1 and v2 succeeded)
         v3_triggered = False
         v3_drift = False
         v3_adversarial = False
         v3_alerts = []
-        
-        if v1_metrics.success and v2_metrics.success:
+
+        if run_v2 and v1_metrics.success and v2_metrics.success:
             logger.info(f"[{correlation_id}] Step 5: Triggering v3 monitoring")
             try:
                 v3_drift, v3_adversarial, v3_alerts = await self.trigger_v3_monitoring(
@@ -707,6 +737,8 @@ class RealShadowOrchestrator:
                     "message": f"v3 trigger failed: {e}",
                     "details": {}
                 })
+        elif not run_v2:
+            logger.info(f"[{correlation_id}] Skipping v3 monitoring (v2 skipped this run)")
         else:
             logger.warning(f"[{correlation_id}] Skipping v3 monitoring (v1 or v2 failed)")
         

@@ -9,7 +9,8 @@
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Zap, Brain, Target, Layers, Sparkles, Shield, Chrome, Github } from "lucide-react";
+import { ArrowRight, Zap, Brain, Target, Layers, Sparkles, Shield } from "lucide-react";
+import { GoogleIcon, GithubIcon } from "@/components/ui/BrandIcons";
 import { SpotlightCard } from "@/components/ui";
 import { PhoneMockup } from "@/components/landing/PhoneMockup";
 import { supabase } from "@/lib/supabase/client";
@@ -191,13 +192,6 @@ export default function MarketingPage() {
             viewport={{ once: true, margin: "-100px" }}
             transition={{ duration: 0.6 }}
           >
-            {/* Product Hunt Badge */}
-            <div className="flex justify-center mb-8">
-              <a href="https://www.producthunt.com/products/roast-3?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-roast-3" target="_blank" rel="noopener noreferrer">
-                <img alt="Roast - Turn review rage into bug tickets in 60 seconds flat | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1093757&theme=neutral&t=1773082056794" />
-              </a>
-            </div>
-            
             <h2 className="text-4xl md:text-7xl font-black text-white mb-6 font-playfair tracking-tight leading-[0.95]" style={{ fontWeight: 900 }}>
               Stop drowning in{" "}
               <span className="text-gradient-fire font-playfair italic">complaints</span>
@@ -224,7 +218,7 @@ export default function MarketingPage() {
                     disabled={isLoading}
                     className="group flex items-center gap-3 px-10 py-5 rounded-full bg-white text-black font-bold hover:shadow-xl hover:shadow-white/20 transition-all duration-300 font-display text-sm tracking-wider disabled:opacity-50"
                   >
-                    <Chrome className="w-5 h-5" />
+                    <GoogleIcon className="w-5 h-5" />
                     Sign in with Google
                   </button>
                   <button
@@ -232,7 +226,7 @@ export default function MarketingPage() {
                     disabled={isLoading}
                     className="group flex items-center gap-3 px-10 py-5 rounded-full bg-neutral-800 border border-white/10 text-white font-bold hover:bg-neutral-700 transition-all duration-300 font-display text-sm tracking-wider disabled:opacity-50"
                   >
-                    <Github className="w-5 h-5" />
+                    <GithubIcon className="w-5 h-5" />
                     Sign in with GitHub
                   </button>
                 </>

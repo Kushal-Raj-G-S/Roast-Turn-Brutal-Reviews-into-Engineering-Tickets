@@ -16,9 +16,9 @@ import {
   ExternalLink,
   Loader2,
   Ticket,
-  Github,
   AlertCircle,
 } from "lucide-react";
+import { GithubIcon } from "@/components/ui/BrandIcons";
 
 // ─────────────────────────────────── types ────────────────────────────────────
 
@@ -659,7 +659,7 @@ export function TicketExportModal({ cluster, appName, onClose }: Props) {
           <div className="flex border-b border-neutral-800/80">
             {(
               [
-                { key: "github", label: "GitHub Issues", icon: <Github className="w-3.5 h-3.5" /> },
+                { key: "github", label: "GitHub Issues", icon: <GithubIcon className="w-3.5 h-3.5" /> },
                 { key: "linear", label: "Linear", icon: <span className="text-sm leading-none">◈</span> },
                 { key: "copy", label: "Copy Markdown", icon: <Copy className="w-3.5 h-3.5" /> },
               ] as { key: Tab; label: string; icon: React.ReactNode }[]
@@ -752,7 +752,7 @@ export function TicketExportModal({ cluster, appName, onClose }: Props) {
                     {ghLoading ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
-                      <Github className="w-4 h-4" />
+                      <GithubIcon className="w-4 h-4" />
                     )}
                     {ghLoading ? "Creating issue…" : "Create GitHub Issue"}
                   </button>
