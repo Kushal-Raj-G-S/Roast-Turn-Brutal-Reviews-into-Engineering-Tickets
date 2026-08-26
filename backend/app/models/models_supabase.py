@@ -30,6 +30,11 @@ class Profile(Base):
     avatar_url = Column(Text, nullable=True)
     provider = Column(Text, nullable=True)  # 'email', 'google', 'github'
     plan = Column(Text, nullable=False, server_default="free")  # free | starter | pro | business | enterprise
+    # Proactive alerting — a Slack incoming-webhook or Discord webhook URL.
+    # Format (Slack {"text":...} vs Discord {"content":...}) is auto-detected
+    # from the URL at send time (notifications.py), so one field covers both.
+    alert_webhook_url = Column(Text, nullable=True)
+    alerts_enabled = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     

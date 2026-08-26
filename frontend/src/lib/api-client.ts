@@ -67,6 +67,10 @@ export interface Cluster {
   review_count?: number;
   assigned_to?: string;
   created_at: string;
+  regression_detected?: boolean;
+  regression_of_title?: string;
+  regression_confidence?: number;
+  regression_match_method?: 'keyword' | 'semantic' | 'keyword+semantic';
 }
 
 export interface AgentSimilarIssue {
@@ -112,6 +116,13 @@ export interface ClusterDetail extends Cluster {
   assigned_at?: string;
   updated_at?: string;
   resolved_at?: string;
+  regression_resolved_at?: string;
+  version_bisect?: {
+    earliest_version: string | null;
+    most_common_version: string;
+    distinct_versions: number;
+    version_counts: Record<string, number>;
+  } | null;
 }
 
 export interface UserStatistics {
@@ -369,6 +380,73 @@ class APIClient {
   // Health check
   async healthCheck(): Promise<{ status: string; version: string }> {
     const response = await fetch(`${this.baseURL}/health`);
+    return response.json();
+  }
+
+  // ── Proactive alerting settings ──────────────────────────────────────
+  async getAlertSettings(): Promise<{ alert_webhook_url: string | null; alerts_enabled: boolean }> {
+    const response = await fetch(`${this.baseURL}/settings/alerts`, {
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) throw new Error('Failed to load alert settings');
+    return response.json();
+  }
+
+  async updateAlertSettings(payload: {
+    alert_webhook_url?: string | null;
+    alerts_enabled?: boolean;
+  }): Promise<{ alert_webhook_url: string | null; alerts_enabled: boolean }> {
+    const response = await fetch(`${this.baseURL}/settings/alerts`, {
+      method: 'PUT',
+      headers: this.getHeaders(true),
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Failed to save alert settings');
+    }
+    return response.json();
+  }
+
+  async testAlertWebhook(): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseURL}/settings/alerts/test`, {
+      method: 'POST',
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Test alert failed');
+    }
+    return response.json();
+  }
+
+  // ── Fix verification / triage / cross-platform ──────────────────────
+  async getTriageQueue(uploadId: number): Promise<{ upload_id: number; clusters: any[] }> {
+    const response = await fetch(`${this.baseURL}/uploads/${uploadId}/triage-queue`, {
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) throw new Error('Failed to load triage queue');
+    return response.json();
+  }
+
+  async getCrossPlatformMatches(uploadId: number): Promise<{ upload_id: number; matches: any[] }> {
+    const response = await fetch(`${this.baseURL}/uploads/${uploadId}/cross-platform-matches`, {
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) throw new Error('Failed to load cross-platform matches');
+    return response.json();
+  }
+
+  // ── Auto-generated repro test stub ───────────────────────────────────
+  async generateTestStub(clusterId: number): Promise<{ cluster_id: number; code: string }> {
+    const response = await fetch(`${this.baseURL}/clusters/${clusterId}/test-stub`, {
+      method: 'POST',
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Test stub generation failed');
+    }
     return response.json();
   }
 }

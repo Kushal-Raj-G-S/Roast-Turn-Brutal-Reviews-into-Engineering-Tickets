@@ -7,10 +7,11 @@
  */
 
 import { motion } from "framer-motion";
-import { User, Bell, Shield, Moon, Sun, Mail, Lock, Globe, Zap, ChevronRight } from "lucide-react";
+import { User, Bell, Shield, Moon, Sun, Mail, Lock, Globe, Zap, ChevronRight, Webhook, Check, Loader2 } from "lucide-react";
 import { SpotlightCard } from "@/components/ui";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { apiClient } from "@/lib/api-client";
 
 export default function SettingsPage() {
   const [user, setUser] = useState<any>(null);
@@ -20,6 +21,13 @@ export default function SettingsPage() {
     push: false,
     weekly: true,
   });
+
+  // Proactive alerting — Slack/Discord webhook, wired to the real backend
+  // (see /settings/alerts). Not tied to the mock notification toggles above.
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [alertsEnabled, setAlertsEnabled] = useState(true);
+  const [webhookStatus, setWebhookStatus] = useState<"idle" | "loading" | "saving" | "testing" | "saved" | "tested" | "error">("idle");
+  const [webhookError, setWebhookError] = useState<string | null>(null);
 
   useEffect(() => {
     // Get current user
@@ -44,12 +52,48 @@ export default function SettingsPage() {
     // Load theme from localStorage
     const savedTheme = localStorage.getItem('theme') as 'dark' | 'light' || 'dark';
     setTheme(savedTheme);
-    
+
     // Apply theme on mount
     if (savedTheme === 'light') {
       document.documentElement.classList.add('light-theme');
     }
+
+    // Load current alert webhook settings
+    setWebhookStatus("loading");
+    apiClient.getAlertSettings()
+      .then((s) => {
+        setWebhookUrl(s.alert_webhook_url || "");
+        setAlertsEnabled(s.alerts_enabled);
+        setWebhookStatus("idle");
+      })
+      .catch(() => setWebhookStatus("idle"));
   }, []);
+
+  const saveWebhook = async () => {
+    setWebhookStatus("saving");
+    setWebhookError(null);
+    try {
+      await apiClient.updateAlertSettings({ alert_webhook_url: webhookUrl || null, alerts_enabled: alertsEnabled });
+      setWebhookStatus("saved");
+      setTimeout(() => setWebhookStatus("idle"), 2000);
+    } catch (e: any) {
+      setWebhookStatus("error");
+      setWebhookError(e.message || "Failed to save");
+    }
+  };
+
+  const testWebhook = async () => {
+    setWebhookStatus("testing");
+    setWebhookError(null);
+    try {
+      await apiClient.testAlertWebhook();
+      setWebhookStatus("tested");
+      setTimeout(() => setWebhookStatus("idle"), 2500);
+    } catch (e: any) {
+      setWebhookStatus("error");
+      setWebhookError(e.message || "Test failed — check the URL");
+    }
+  };
 
   const toggleTheme = () => {
     const newTheme = theme === 'dark' ? 'light' : 'dark';
@@ -287,6 +331,81 @@ export default function SettingsPage() {
                       notifications.weekly ? 'translate-x-6' : 'translate-x-0.5'
                     }`}
                   />
+                </button>
+              </div>
+            </div>
+          </SpotlightCard>
+        </motion.div>
+
+        {/* Proactive Alerts Section — real backend wiring (Slack/Discord webhook) */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35 }}
+        >
+          <SpotlightCard className="p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500/20 to-red-500/20 border border-orange-500/20 flex items-center justify-center">
+                <Webhook className="w-5 h-5 text-orange-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">Proactive Alerts</h3>
+                <p className="text-xs text-neutral-500">Get pinged in Slack/Discord the moment something needs attention</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs text-neutral-500 mb-2 block">Webhook URL</label>
+                <input
+                  type="text"
+                  value={webhookUrl}
+                  onChange={(e) => setWebhookUrl(e.target.value)}
+                  placeholder="https://hooks.slack.com/services/... or https://discord.com/api/webhooks/..."
+                  className="w-full p-3 rounded-xl bg-white/5 border border-white/10 text-sm text-white placeholder:text-neutral-600 focus:outline-none focus:border-orange-500/50"
+                />
+                <p className="text-xs text-neutral-600 mt-2">
+                  Paste a Slack incoming-webhook or Discord webhook URL. Fires when a fix doesn't hold (a resolved
+                  cluster resurfaces) or a new CRITICAL cluster is created — free to set up on Slack/Discord's own side.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10">
+                <div className="flex items-center gap-3">
+                  <Bell className="w-4 h-4 text-neutral-500" />
+                  <div>
+                    <p className="text-sm text-white">Alerts Enabled</p>
+                    <p className="text-xs text-neutral-500">Toggle off to pause without losing the URL</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAlertsEnabled((v) => !v)}
+                  className={`w-12 h-6 rounded-full transition-colors ${alertsEnabled ? 'bg-orange-500' : 'bg-neutral-700'}`}
+                >
+                  <div className={`w-5 h-5 bg-white rounded-full transition-transform ${alertsEnabled ? 'translate-x-6' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
+
+              {webhookError && (
+                <p className="text-xs text-red-400">{webhookError}</p>
+              )}
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={saveWebhook}
+                  disabled={webhookStatus === "saving" || webhookStatus === "testing"}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-orange-500 to-red-600 text-white text-sm font-semibold hover:shadow-lg hover:shadow-orange-500/25 transition-all disabled:opacity-50"
+                >
+                  {webhookStatus === "saving" ? <Loader2 className="w-4 h-4 animate-spin" /> : webhookStatus === "saved" ? <Check className="w-4 h-4" /> : null}
+                  {webhookStatus === "saved" ? "Saved" : "Save"}
+                </button>
+                <button
+                  onClick={testWebhook}
+                  disabled={!webhookUrl || webhookStatus === "saving" || webhookStatus === "testing"}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-neutral-200 text-sm font-medium hover:bg-white/10 transition-colors disabled:opacity-40"
+                >
+                  {webhookStatus === "testing" ? <Loader2 className="w-4 h-4 animate-spin" /> : webhookStatus === "tested" ? <Check className="w-4 h-4 text-emerald-400" /> : null}
+                  {webhookStatus === "tested" ? "Sent!" : "Send test alert"}
                 </button>
               </div>
             </div>

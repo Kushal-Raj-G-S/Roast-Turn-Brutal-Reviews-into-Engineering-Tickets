@@ -30,7 +30,7 @@
   - **Semantic clustering** — groups reviews by what's actually broken using local `all-MiniLM-L6-v2` embeddings (384-dim vectors, cosine similarity), run through an **ONNX int8-quantized** model for faster CPU inference
   - **Scale-adaptive indexing** — FAISS `IndexFlatIP` (exact) for smaller uploads, automatically switches to `IndexHNSWFlat` (approximate nearest-neighbor) above 100k reviews so very large uploads don't stall on O(n²) similarity search
   - **Severity scoring** — every cluster gets automatically classified as `CRITICAL / HIGH / MEDIUM / LOW`
-  - **Regression detection** — flags if a previously-resolved issue has resurfaced in the latest batch (Jaccard similarity ≥ 0.40 across your upload history)
+  - **Fix verification loop** — the thing most tools don't do: when a cluster you marked `resolved` resurfaces in a later upload, Roast flags it as **"fix didn't hold."** Matches on both keyword overlap *and* semantic similarity, so a bug reported in completely different words still gets caught — "App crashes on login" vs "App freezes when signing in" scores 0.00 on keyword overlap but **0.71 semantically**. Each flag carries a confidence % and which signal caught it
   - **Velocity spike detection** — alerts when a cluster grows 1.5σ above baseline with ≥ 15 reviews in the window
   - **Adversarial detection** — identifies coordinated spam campaigns, duplicate bot reviews, and template injection attacks
 
@@ -53,6 +53,10 @@
   - Expandable cluster cards — view sample reviews, affected versions & devices, keywords
   - **Agent analysis panel** per cluster — the reasoning pipeline, precedent found, faithfulness/relevancy score bars, and why
   - **Recurring-issue badges**, **evidence-support badges** (well-supported vs. speculative — verify manually), and **severity-adjustment badges** when the agent's suggested severity differs from the assigned one
+  - **⚡ "Fix first" ranking** — one toggle switches from severity buckets to a single ranked queue scored from four fused signals (severity + AI evidence faithfulness + fix-didn't-hold + review volume), so a HIGH whose fix demonstrably failed correctly outranks a CRITICAL whose explanation is speculative. Full score breakdown on hover — never a black-box number
+  - **Release bisect** — "first seen in v1.2025.343, most reports on v1.2025.350, 3 versions affected," derived from the review data itself (shown only when your CSV actually carries an app-version column)
+  - **Cross-platform fusion** — flags when an Android cluster and an iOS cluster look like one shared-backend bug rather than two unrelated client issues, so you don't triage it twice
+  - **One-click repro test stub** — turns the agent's reproduction steps into a runnable Playwright test skeleton, with `TODO` placeholders instead of invented selectors
   - Sentiment-aware top-signal card — won't mislabel a positive-sentiment cluster as a "complaint"
   - Live "AI analysis still running" banner while the background agent pass completes
   - Upload history with per-upload cluster previews and delete (cascading)
@@ -61,6 +65,12 @@
   ### 🔬 AI Debug Center *(Pro+ only)*
   - Per-severity category summaries — "here's what all your CRITICAL issues have in common," with clickable evidence citations that jump to and expand the exact cluster being referenced
   - **Live Playground** — run the actual RCA prompt against the live model yourself, right in the browser: pick a "model style" persona (16+ family presets — Meta, DeepSeek, Qwen, GLM, Mistral, Google, NVIDIA, and more), set the temperature, and get a genuinely differently-structured answer (step-by-step reasoning vs. terse vs. hedged vs. ranked-list, depending on style) — backed by one fast, verified model so it never hangs on an uninvokable model ID. Copy the result or reset back to the default prompt any time.
+
+  ### 🔔 Proactive Alerts
+  - Paste a **Slack incoming-webhook or Discord webhook** URL in Settings — the format is auto-detected, so you don't have to say which one you're using
+  - Fires the moment something actually warrants interrupting you: a **fix didn't hold**, or a **new CRITICAL cluster** appears
+  - "Send test alert" button to verify the wiring before you rely on it; toggle alerts off without losing the URL
+  - Free on both platforms — no paid integration, no extra account
 
   ### 📥 Export — 5 Formats
 

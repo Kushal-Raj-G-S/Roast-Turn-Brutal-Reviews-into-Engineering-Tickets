@@ -353,6 +353,89 @@ The old hero demoed the product's *UI* (a phone showing the app). The new one de
 
 ---
 
+## 15. Closing the loop — fix verification, fused triage, alerting, repro stubs (2026-08-27)
+
+**New files:** `backend/app/services/notifications.py`, `backend/app/services/ai/repro_stub_generator.py`, `backend/migrations/add_fix_verification_and_alerts.sql`
+**Touched:** `backend/app/core/shadow_deployment.py`, `backend/app/api/bulk_routes.py`, `backend/app/models/bulk_models.py`, `backend/app/models/models_supabase.py`, `frontend/src/lib/api-client.ts`, `frontend/src/app/(app)/analytics/page.tsx`, `frontend/src/app/(app)/settings/page.tsx`
+
+Up to this point the product ran strictly one direction — reviews in, ticket out — and then forgot. Everything in this section closes a loop instead of adding another forward pipeline stage.
+
+### 15.1 Fix verification loop (the differentiator)
+
+**Old:** `_detect_regressions` already existed, comparing each new cluster's title against the user's previously-**resolved** clusters using token-level **Jaccard overlap** at a 0.40 threshold. Stored a bare boolean (`regression_detected`) plus the matched title.
+
+**New:** the same function now *also* computes **semantic cosine similarity** between new and resolved clusters, using the pipeline's own local embedding backend (`bulk_embedding.EmbeddingBackend` — no network call, no API cost, same model already loaded for clustering). Either signal crossing its threshold flags a regression; three new columns record *how sure* and *which signal caught it*:
+
+- `regression_confidence` (float) — `max(jaccard, semantic)`
+- `regression_match_method` — `keyword` | `semantic` | `keyword+semantic`
+- `regression_resolved_at` — when the *original* cluster was marked resolved
+
+**Why this specifically:** Jaccard structurally cannot match a paraphrase. Measured on real embeddings during the build:
+
+| new cluster | previously resolved | Jaccard | semantic | caught by |
+|---|---|---|---|---|
+| "App crashes on login" | "App freezes when signing in" | **0.00** | **0.708** | semantic only |
+| "Video playback stutters badly" | "Videos keep buffering and lagging" | **0.00** | **0.709** | semantic only |
+| "Cannot upload profile picture" | "Photo upload fails every time" | **0.12** | **0.672** | semantic only |
+| "App crashes on login" | "Dark mode colors look wrong" | 0.00 | 0.120 | (correctly rejected) |
+| "Battery drains fast" | "Great app love the new update" | 0.00 | 0.066 | (correctly rejected) |
+
+All three real paraphrase pairs were **completely invisible** to the pre-existing keyword matcher and are now caught, with a wide clean gap (0.67+ matches vs ≤0.12 non-matches) around the chosen `_SEMANTIC_REGRESSION_THRESHOLD = 0.62`. The UI badge was relabelled from `REGRESSION` to **`FIX DIDN'T HOLD`** with the confidence percentage inline, because that is the actual claim being made and it's the one competitors can't make.
+
+### 15.2 Confidence-weighted triage queue
+
+**New:** `GET /uploads/{id}/triage-queue`. The pipeline already computed severity, RAGAS faithfulness, the regression signal, and review volume *independently* — but never fused them, leaving engineers to re-derive "what do I fix first" by eye from four separate badges. `_priority_score` combines them: severity weight + `faithfulness × 20` + `30 × regression_confidence` + `log1p(review_count) × 5` (log-scaled so one huge cluster can't drown out everything else).
+
+The ordering this produces is the point — verified against synthetic cases:
+
+```
+144.52  critical, 200 reviews, well-supported (faithfulness 0.9)
+132.66  high, 50 reviews + REGRESSION (0.9 confidence)   <-- outranks...
+130.52  critical, 200 reviews, SPECULATIVE (faithfulness 0.2)  <-- ...this
+ 87.43  medium, 800 reviews (huge volume, still ranked below real severity)
+ 33.96  low, 5 reviews
+```
+
+A HIGH whose fix demonstrably didn't hold outranking a CRITICAL whose AI explanation isn't evidence-supported is exactly the judgement severity-alone cannot express. Surfaced in the analytics page as a **"By severity" / "⚡ Fix first"** toggle (the toggle only appears once scores have loaded), with the full score breakdown in a hover tooltip so the number is never a black box.
+
+### 15.3 Proactive alerting (Slack / Discord)
+
+**Old:** there was **no outbound notification code anywhere in the backend** — searched, confirmed, zero. Velocity-spike detection existed but only in the v2/v3 shadow path, which is **disabled by default** (§7), so hooking alerts there would have meant alerts that never fire.
+
+**New:** `notifications.py` posts to a Slack incoming-webhook or Discord webhook. One `profiles.alert_webhook_url` field covers both — the payload shape (`{"text":…}` vs `{"content":…}`) is auto-detected from the URL, so the user never has to say which service they're on. Wired into the **v1** (always-on) pipeline for the two events actually worth interrupting someone for: a fix that didn't hold, and a new CRITICAL cluster. Configured in Settings → **Proactive Alerts**, with a "Send test alert" button.
+
+Best-effort by construction: 5s timeout, returns `False` on any failure, never raises — a dead webhook can't affect the upload it's reporting on. Verified: no URL, empty URL, and a syntactically-valid-but-rejected Slack URL all return `False` without raising (the last one round-tripped to Slack's real API, got `404 no_team`, logged a warning, and continued).
+
+### 15.4 Auto-generated repro test stubs
+
+**New:** `POST /clusters/{id}/test-stub` turns `StructuredRCA.reproduction_steps` (already produced by the agent, previously terminal prose) into a runnable **Playwright** skeleton — closing review → ticket → *runnable test*. Reuses the singleton `LLMService`, so it shares the same self-throttled rate limit as every other caller; no new provider or model.
+
+The prompt explicitly forbids inventing selectors/URLs not implied by the bug report, requiring clearly-marked `TODO` placeholders instead — a plausible-looking fake selector is worse than an obvious blank. Unlike RCA generation this **raises rather than falling back**, because there is no safe fallback text for a test stub: a wrong test is worse than no test. Surfaced in the analytics cluster accordion with a Generate/Regenerate button and copy-to-clipboard.
+
+**Security note:** this is the one new endpoint with an explicit ownership check on top of auth. The sibling read-only cluster endpoints are unauthenticated in this codebase, but every call here spends a real LLM request against a shared account rate limit — unauthenticated, anyone could loop over cluster ids and burn the whole account's throughput.
+
+### 15.5 Release-bisected regressions (best-effort)
+
+**New:** `Cluster.affected_versions` exists in the schema but is *never populated* by the live pipeline. However each entry in `sample_reviews` already carries its own `version` (mapped from the CSV's `appVersion`/`app_version`/`version` column). Rather than a pipeline or schema change, `bisect_versions()` derives on read: earliest version, most-common version, distinct count, and a top-5 distribution.
+
+Surveyed against the real database: **10 of 51 completed uploads** carry version data, and on those it resolves for ~18 of 20 clusters — e.g. `{'1.2025.350': 12, '1.2026.006': 7, '1.2025.343': 1}`, a genuinely actionable concentration. Returns `null` (and the UI renders nothing) for the majority of CSVs that have no version column, rather than fabricating a bisect.
+
+### 15.6 Cross-platform bug fusion (best-effort)
+
+**New:** `GET /uploads/{id}/cross-platform-matches` flags cluster pairs that look like one shared-backend issue reported separately on Android and iOS, so it isn't triaged twice as two unrelated client bugs. Uses the existing heuristic `_detect_platform` (regex over title/keywords) to split, then semantic similarity ≥ 0.60 to pair.
+
+Labelled in the UI as *"Same bug on both platforms?"* with an explicit "platform is inferred from review wording, so confirm before merging" caveat — because there is **no structured platform column anywhere in the ingest path** (no `platform`, no `os_version`; device is keyword-matched out of free text). This is deliberately framed as candidates for a human to confirm, not an assertion.
+
+### 15.7 A deployment hazard found and fixed during this work
+
+Adding the five new model columns broke **every** `clusters` and `profiles` query with `UndefinedColumn` until the migration was applied — and because `init_db()` uses `SQLModel.metadata.create_all()`, which creates missing *tables* but never missing *columns*, nothing would have auto-repaired it. Since `get_current_user` queries `profiles`, that would have taken down every authenticated request on deploy, not just the new features. Caught by explicitly querying both tables pre-migration rather than assuming additive model changes are safe. The migration (`add_fix_verification_and_alerts.sql`) is additive and `IF NOT EXISTS`-guarded; it has been applied, and both queries verified working afterwards.
+
+**If deploying this to another environment, run that migration before starting the app.**
+
+A second, quieter version of the same class of problem: the stub generator was originally written as `test_stub_generator.py`, which silently matched the `test_*.py` pattern in `.gitignore` — it would have been absent from a fresh clone and crashed the import at request time, while working perfectly on the machine it was written on. Renamed to `repro_stub_generator.py` rather than adding a `.gitignore` exception, since weakening a broad "don't commit test files" rule to accommodate one production file is the worse trade.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -371,3 +454,9 @@ The old hero demoed the product's *UI* (a phone showing the app). The new one de
 | Upload failure handling | Could hang at "processing" forever | Explicitly marked `failed` with an error message |
 | Upload progress bar | Bound to a field the backend never sent (animated to `undefined%`) | Size-aware estimate scaled by the file's real review count |
 | Marketing hero | Phone-demo scroll animation | Scroll-driven "pipeline world" — 6 AI-generated scenes narrating the real backend pipeline |
+| Regression detection | Keyword (Jaccard) title overlap only — blind to paraphrases | Keyword **+ semantic** embedding match, with confidence % and which signal caught it |
+| Prioritisation | Severity alone; 4 independent signals shown as separate badges | Optional fused "⚡ Fix first" ranking (severity + AI faithfulness + regression + volume) |
+| Notifications | None — no outbound webhook code existed at all | Slack/Discord alerts on fix-didn't-hold and new CRITICAL clusters |
+| Repro steps | Terminal prose in the RCA | On-demand runnable Playwright test stub |
+| Release correlation | `affected_versions` column existed but was never populated | Derived on read from per-review versions (10/51 real uploads have the data) |
+| Cross-platform | Android/iOS versions of one bug triaged as two unrelated issues | Best-effort "same bug on both platforms?" candidate flagging |

@@ -10,6 +10,8 @@ import logging
 from pathlib import Path
 from typing import Optional, List
 
+import numpy as np
+
 from app.models.bulk_models import Upload, Cluster
 from sqlmodel import Session, select
 
@@ -37,6 +39,45 @@ def _title_similarity(a: str, b: str) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+def _cluster_text(c: Cluster) -> str:
+    """Same title+keywords composition vector_store.py uses to index a cluster,
+    so this similarity is directly comparable to what hybrid_search would find."""
+    return f"{c.title} {' '.join(c.keywords or [])}"
+
+
+def _semantic_similarities(new_clusters: List[Cluster], resolved_clusters: List[Cluster]) -> Optional[np.ndarray]:
+    """
+    Pairwise cosine similarity between every new cluster and every resolved
+    cluster, via the same local embedding backend used everywhere else in the
+    pipeline (bulk_embedding.py) -- no network call, no extra API cost.
+    Returns an (len(new), len(resolved)) matrix, or None if embedding is
+    unavailable for any reason (caller falls back to Jaccard-only).
+    """
+    try:
+        from app.services.bulk_embedding import EmbeddingBackend
+        backend = EmbeddingBackend()
+        texts = [_cluster_text(c) for c in new_clusters] + [_cluster_text(c) for c in resolved_clusters]
+        vecs = backend.encode_batch(texts)
+        if vecs is None or len(vecs) != len(texts):
+            return None
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        vecs = vecs / norms
+        new_vecs = vecs[: len(new_clusters)]
+        resolved_vecs = vecs[len(new_clusters):]
+        return new_vecs @ resolved_vecs.T
+    except Exception as e:
+        logger.warning(f"Semantic regression matching unavailable, Jaccard-only this run ({e})")
+        return None
+
+
+# A cluster whose title shares almost no words with a resolved one ("crashes
+# on login" vs "freezes when signing in") still scores ~0 on Jaccard but well
+# above this on cosine similarity of a sentence embedding -- this threshold
+# is what actually catches paraphrased recurrences of the same underlying bug.
+_SEMANTIC_REGRESSION_THRESHOLD = 0.62
+
+
 def _detect_regressions(
     session: Session,
     new_cluster_ids: List[int],
@@ -45,8 +86,16 @@ def _detect_regressions(
 ) -> None:
     """
     Compare newly-created clusters against all resolved clusters from this user's
-    PREVIOUS uploads. If title similarity ≥ 0.40, mark the new cluster as a
-    regression of the resolved one.
+    PREVIOUS uploads -- the "fix verification loop": a cluster marked `resolved`
+    that resurfaces in a later upload means the fix didn't actually hold.
+
+    Two independent signals are combined, since they catch different things:
+    - Jaccard title-word overlap: cheap, catches near-identical titles.
+    - Semantic cosine similarity (local sentence embeddings): catches the same
+      bug described in different words, which Jaccard has zero chance on.
+    Either signal crossing its threshold marks a regression; the stored
+    `regression_confidence` is the max of the two, so the UI can show how
+    confident the match actually is instead of a bare yes/no.
 
     Runs synchronously inside the background thread (no await needed).
     """
@@ -78,24 +127,43 @@ def _detect_regressions(
             select(Cluster).where(Cluster.id.in_(new_cluster_ids))
         ).all()
     )
+    if not new_clusters:
+        return
+
+    semantic_matrix = _semantic_similarities(new_clusters, resolved_clusters)
 
     regression_count = 0
-    for nc in new_clusters:
-        best_score = 0.0
+    for i, nc in enumerate(new_clusters):
+        best_jaccard = 0.0
+        best_semantic = 0.0
         best_match: Optional[Cluster] = None
-        for rc in resolved_clusters:
-            score = _title_similarity(nc.title, rc.title)
-            if score > best_score:
-                best_score = score
+        for j, rc in enumerate(resolved_clusters):
+            jaccard = _title_similarity(nc.title, rc.title)
+            semantic = float(semantic_matrix[i, j]) if semantic_matrix is not None else 0.0
+            combined_best_for_this_pair = max(jaccard, semantic)
+            if combined_best_for_this_pair > max(best_jaccard, best_semantic):
+                best_jaccard = jaccard
+                best_semantic = semantic
                 best_match = rc
-        if best_match and best_score >= 0.40:
+
+        is_regression = best_jaccard >= 0.40 or best_semantic >= _SEMANTIC_REGRESSION_THRESHOLD
+        if best_match and is_regression:
+            confidence = max(best_jaccard, best_semantic)
+            method = (
+                "keyword+semantic" if (best_jaccard >= 0.40 and best_semantic >= _SEMANTIC_REGRESSION_THRESHOLD)
+                else "semantic" if best_semantic >= _SEMANTIC_REGRESSION_THRESHOLD
+                else "keyword"
+            )
             nc.regression_detected = True
             nc.regression_of_title = best_match.title
+            nc.regression_confidence = round(confidence, 3)
+            nc.regression_match_method = method
+            nc.regression_resolved_at = best_match.resolved_at
             session.add(nc)
             regression_count += 1
             logger.warning(
-                f"↩ REGRESSION detected: cluster {nc.id} '{nc.title}' "
-                f"matches resolved '{best_match.title}' (score={best_score:.2f})"
+                f"↩ REGRESSION detected: cluster {nc.id} '{nc.title}' matches resolved "
+                f"'{best_match.title}' (confidence={confidence:.2f}, method={method})"
             )
 
     if regression_count:
@@ -103,6 +171,41 @@ def _detect_regressions(
         logger.info(f"Regression check: {regression_count} regression(s) flagged for upload {upload_id}")
     else:
         logger.info(f"Regression check: no regressions found for upload {upload_id}")
+
+
+async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[Cluster]) -> None:
+    """
+    Proactive alerting: post to the user's Slack/Discord webhook (if they've
+    set one) for the two events actually worth interrupting someone for --
+    a fix that didn't hold, and a brand-new CRITICAL cluster. Silently does
+    nothing if no webhook is configured or alerts are turned off.
+    """
+    if not clusters:
+        return
+
+    from app.models.models_supabase import Profile
+    from app.services import notifications
+
+    profile = session.get(Profile, upload.user_id)
+    if not profile or not profile.alerts_enabled or not profile.alert_webhook_url:
+        return
+
+    webhook_url = profile.alert_webhook_url
+    sent = 0
+    for c in clusters:
+        if c.regression_detected and c.regression_of_title:
+            text = notifications.format_regression_alert(
+                c.title, c.regression_of_title, c.regression_confidence or 0.5, upload.id
+            )
+        elif (c.severity or "").lower() == "critical":
+            text = notifications.format_critical_alert(c.title, c.review_count, upload.id)
+        else:
+            continue
+        if await notifications.send_alert(webhook_url, text):
+            sent += 1
+
+    if sent:
+        logger.info(f"📣 Sent {sent} alert(s) for upload {upload.id}")
 
 
 # Global orchestrator instance (lazy initialization)
@@ -241,16 +344,24 @@ async def trigger_shadow_deployment(upload_id: int, csv_path: str):
                     logger.info(f"✅ Updated upload {upload_id} status to completed")
 
                     # ↩ Fix Verification Loop — detect regressions vs resolved history
+                    upload_clusters: List[Cluster] = []
                     try:
-                        new_cluster_ids = [
-                            c.id for c in session.exec(
-                                select(Cluster).where(Cluster.upload_id == upload_id)
-                            ).all()
-                            if c.id is not None
-                        ]
+                        upload_clusters = list(session.exec(
+                            select(Cluster).where(Cluster.upload_id == upload_id)
+                        ).all())
+                        new_cluster_ids = [c.id for c in upload_clusters if c.id is not None]
                         _detect_regressions(session, new_cluster_ids, upload_id, upload.user_id)
+                        session.commit()
                     except Exception as reg_err:
                         logger.warning(f"Regression detection failed (non-fatal): {reg_err}")
+
+                    # 📣 Proactive alerting — regressions and new CRITICAL clusters,
+                    # straight to the user's Slack/Discord webhook if they've set one.
+                    # Best-effort: never lets a failed/missing webhook affect the upload.
+                    try:
+                        await _send_upload_alerts(session, upload, upload_clusters)
+                    except Exception as alert_err:
+                        logger.warning(f"Alert send failed (non-fatal): {alert_err}")
 
                     # 🗑️ Delete the uploaded CSV — raw data is no longer needed
                     # after clusters have been written to the database.

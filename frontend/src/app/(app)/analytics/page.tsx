@@ -31,6 +31,7 @@ import {
   Download,
   FileSpreadsheet,
   HelpCircle,
+  FlaskConical,
 } from "lucide-react";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
@@ -84,6 +85,8 @@ type AnalyticsData = {
     created_at: string;
     regression_detected?: boolean;
     regression_of_title?: string;
+    regression_confidence?: number;
+    regression_match_method?: string;
     ai_metadata?: AgentMetadata | null;
   }>;
   upload_data?: {
@@ -115,6 +118,65 @@ export default function AnalyticsPage() {
   // enrichment land -- distinct from "still polling normally", shown as a
   // softer "taking longer than usual" note instead of an active spinner.
   const [aiEnrichmentGaveUp, setAiEnrichmentGaveUp] = useState(false);
+
+  // ── Triage queue / cross-platform / test stubs ────────────────────────────
+  // 'severity' = the original bucketed view. 'triage' = one flat list ranked
+  // by the backend's fused priority score (severity + AI-evidence
+  // faithfulness + regression signal + volume), so "what do I fix first"
+  // doesn't have to be re-derived by eye from four separate badges.
+  const [sortMode, setSortMode] = useState<'severity' | 'triage'>('severity');
+  const [triageScores, setTriageScores] = useState<Map<number, { score: number; breakdown: Record<string, number> }>>(new Map());
+  const [crossPlatform, setCrossPlatform] = useState<Array<{
+    android_cluster_id: number; android_title: string;
+    ios_cluster_id: number; ios_title: string; confidence: number;
+  }>>([]);
+  const [testStubs, setTestStubs] = useState<Map<number, string>>(new Map());
+  const [loadingStubId, setLoadingStubId] = useState<number | null>(null);
+  const [stubError, setStubError] = useState<Map<number, string>>(new Map());
+
+  // Fetch the fused triage ranking + best-effort cross-platform pairs for this
+  // upload. Both are additive: if either fails the page renders exactly as it
+  // did before, just without that extra signal.
+  useEffect(() => {
+    if (!uploadId) return;
+    let cancelled = false;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token || cancelled) return;
+      apiClient.setToken(session.access_token);
+
+      apiClient.getTriageQueue(Number(uploadId))
+        .then((res) => {
+          if (cancelled) return;
+          const m = new Map<number, { score: number; breakdown: Record<string, number> }>();
+          for (const c of res.clusters ?? []) {
+            m.set(c.id, { score: c.priority_score, breakdown: c.priority_breakdown ?? {} });
+          }
+          setTriageScores(m);
+        })
+        .catch(() => { /* additive signal — silent */ });
+
+      apiClient.getCrossPlatformMatches(Number(uploadId))
+        .then((res) => { if (!cancelled) setCrossPlatform(res.matches ?? []); })
+        .catch(() => { /* additive signal — silent */ });
+    })();
+    return () => { cancelled = true; };
+  }, [uploadId]);
+
+  const generateStub = async (clusterId: number) => {
+    setLoadingStubId(clusterId);
+    setStubError((prev) => { const n = new Map(prev); n.delete(clusterId); return n; });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) apiClient.setToken(session.access_token);
+      const res = await apiClient.generateTestStub(clusterId);
+      setTestStubs((prev) => new Map(prev).set(clusterId, res.code));
+    } catch (e: any) {
+      setStubError((prev) => new Map(prev).set(clusterId, e?.message || 'Generation failed'));
+    } finally {
+      setLoadingStubId(null);
+    }
+  };
 
   // ── AI enrichment pending banner ──────────────────────────────────────────
   // The page loads with clusters as soon as v1 processing finishes, but the
@@ -1281,6 +1343,7 @@ export default function AnalyticsPage() {
           const isExpanded = expandedClusters.has(cluster.id);
           const details = clusterDetails.get(cluster.id);
           const isSpiking = spikeIds.has(cluster.id);
+          const triage = triageScores.get(cluster.id);
           const isRegression = !!cluster.regression_detected;
 
           // â”€â”€ User-facing AI badges (same agent data, plain-language framing) â”€â”€
@@ -1323,11 +1386,27 @@ export default function AnalyticsPage() {
                           {isRegression && (
                             <span
                               className="inline-flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 tracking-wide cursor-help"
-                              title={cluster.regression_of_title
-                                ? `Previously resolved: "${cluster.regression_of_title}"`
-                                : 'This issue was previously resolved and has re-appeared'}
+                              title={[
+                                cluster.regression_of_title
+                                  ? `The fix didn't hold. Previously resolved as: "${cluster.regression_of_title}"`
+                                  : 'This issue was previously resolved and has re-appeared',
+                                typeof cluster.regression_confidence === 'number'
+                                  ? `Match confidence: ${(cluster.regression_confidence * 100).toFixed(0)}%`
+                                  : null,
+                                cluster.regression_match_method === 'semantic'
+                                  ? 'Matched by meaning (different wording, same underlying bug)'
+                                  : cluster.regression_match_method === 'keyword+semantic'
+                                    ? 'Matched by both wording and meaning'
+                                    : cluster.regression_match_method === 'keyword'
+                                      ? 'Matched by shared wording'
+                                      : null,
+                              ].filter(Boolean).join('\n')}
                             >
-                              <RotateCcw className="w-2.5 h-2.5" />REGRESSION
+                              <RotateCcw className="w-2.5 h-2.5" />
+                              FIX DIDN&apos;T HOLD
+                              {typeof cluster.regression_confidence === 'number' && (
+                                <span className="opacity-70">{(cluster.regression_confidence * 100).toFixed(0)}%</span>
+                              )}
                               <HelpCircle className="w-2.5 h-2.5 opacity-60" />
                             </span>
                           )}
@@ -1369,6 +1448,22 @@ export default function AnalyticsPage() {
                       <p className="text-sm text-white font-medium leading-snug">{cluster.title}</p>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
+                      {triage && (
+                        <span
+                          className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-white/5 text-neutral-300 border border-white/10 cursor-help whitespace-nowrap"
+                          title={[
+                            `Priority score: ${triage.score}`,
+                            '',
+                            'Fused from:',
+                            `  severity weight   ${triage.breakdown.severity_weight ?? '—'}`,
+                            `  AI faithfulness   ${triage.breakdown.faithfulness ?? '—'}`,
+                            `  regression boost  ${triage.breakdown.regression_boost ?? 0}`,
+                            `  review volume     ${triage.breakdown.velocity ?? '—'}`,
+                          ].join('\n')}
+                        >
+                          ⚡ {triage.score}
+                        </span>
+                      )}
                       <span className={`text-xs ${s.color} font-medium whitespace-nowrap`}>
                         {cluster.review_count} review{cluster.review_count !== 1 ? 's' : ''}
                       </span>
@@ -1405,6 +1500,84 @@ export default function AnalyticsPage() {
                     {details.ai_metadata && (
                       <AgentAnalysisPanel metadata={details.ai_metadata} accentColor={s.color} />
                     )}
+
+                    {/* Release bisect — only when the CSV actually carried an
+                        app-version column (most don't, so this is absent
+                        rather than faked). */}
+                    {details.version_bisect && (
+                      <div className="px-4 py-3 bg-black/20 border-b border-white/5">
+                        <p className={`text-xs ${s.color} font-semibold uppercase tracking-wider mb-2`}>
+                          Release bisect
+                        </p>
+                        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs">
+                          {details.version_bisect.earliest_version && (
+                            <span className="text-neutral-300">
+                              First seen in{' '}
+                              <span className="font-mono font-bold text-white">
+                                {details.version_bisect.earliest_version}
+                              </span>
+                            </span>
+                          )}
+                          <span className="text-neutral-400">
+                            Most reports on{' '}
+                            <span className="font-mono font-bold text-neutral-200">
+                              {details.version_bisect.most_common_version}
+                            </span>
+                          </span>
+                          <span className="text-neutral-600">
+                            {details.version_bisect.distinct_versions} version
+                            {details.version_bisect.distinct_versions !== 1 ? 's' : ''} affected
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Repro test stub — turns the RCA's repro steps into a
+                        runnable Playwright skeleton on demand. */}
+                    <div className="px-4 py-3 bg-black/20 border-b border-white/5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className={`text-xs ${s.color} font-semibold uppercase tracking-wider`}>
+                            Repro test stub
+                          </p>
+                          <p className="text-[11px] text-neutral-600 mt-0.5">
+                            Generates a Playwright skeleton from this issue&apos;s repro steps
+                          </p>
+                        </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); generateStub(cluster.id); }}
+                          disabled={loadingStubId === cluster.id}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-[11px] font-semibold text-neutral-200 hover:bg-white/10 transition-colors disabled:opacity-50 flex-shrink-0"
+                        >
+                          {loadingStubId === cluster.id
+                            ? <><Loader2 className="w-3 h-3 animate-spin" />Generating…</>
+                            : <><FlaskConical className="w-3 h-3" />{testStubs.has(cluster.id) ? 'Regenerate' : 'Generate test'}</>}
+                        </button>
+                      </div>
+
+                      {stubError.get(cluster.id) && (
+                        <p className="text-[11px] text-red-400 mt-2">{stubError.get(cluster.id)}</p>
+                      )}
+
+                      {testStubs.has(cluster.id) && (
+                        <div className="mt-3">
+                          <div className="flex items-center justify-end mb-1.5">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(testStubs.get(cluster.id) || '');
+                              }}
+                              className="text-[10px] text-neutral-500 hover:text-neutral-300 transition-colors"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                          <pre className="p-3 rounded-lg bg-black/50 border border-white/10 text-[11px] text-neutral-300 overflow-x-auto whitespace-pre-wrap font-mono leading-relaxed max-h-72 overflow-y-auto">
+                            {testStubs.get(cluster.id)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
                     {details.sample_reviews && (
                     <div className="p-4 space-y-3 bg-black/20">
                       <p className={`text-xs ${s.color} font-semibold uppercase tracking-wider`}>
@@ -1480,6 +1653,28 @@ export default function AnalyticsPage() {
 
                 {/* Signal summary badges + export hint */}
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* Sort mode: severity buckets vs fused priority ranking */}
+                  {triageScores.size > 0 && (
+                    <div className="flex items-center rounded-full bg-white/5 border border-white/10 p-0.5 mr-1">
+                      <button
+                        onClick={() => setSortMode('severity')}
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                          sortMode === 'severity' ? 'bg-white/10 text-white' : 'text-neutral-500 hover:text-neutral-300'
+                        }`}
+                      >
+                        By severity
+                      </button>
+                      <button
+                        onClick={() => setSortMode('triage')}
+                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide transition-colors ${
+                          sortMode === 'triage' ? 'bg-white/10 text-white' : 'text-neutral-500 hover:text-neutral-300'
+                        }`}
+                        title="One ranked list, scored from severity + AI evidence quality + regression signal + review volume"
+                      >
+                        ⚡ Fix first
+                      </button>
+                    </div>
+                  )}
                   {totalSpiking > 0 && (
                     <span className="inline-flex items-center gap-1.5 text-xs font-black px-3 py-1.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30">
                       <Zap className="w-3 h-3" />{totalSpiking} SPIKING
@@ -1496,31 +1691,81 @@ export default function AnalyticsPage() {
                 </div>
               </div>
 
-              {/* Severity buckets */}
-              <div className="space-y-6">
-                {severities.map(({ key, label, dotCls, textCls, delay }) => {
-                  const bucket = analytics.clusters!.filter(c => c.severity === key);
-                  if (bucket.length === 0) return null;
-                  return (
-                    <motion.div
-                      key={key}
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay, duration: 0.4 }}
-                    >
-                      <div className="flex items-center gap-2 mb-4">
-                        <div className={`w-3 h-3 rounded-full ${dotCls}`} />
-                        <h4 className={`text-sm font-bold ${textCls} uppercase tracking-wider`}>
-                          {label} ({bucket.length})
-                        </h4>
+              {/* Cross-platform fusion — best-effort: the pipeline has no real
+                  platform column, so these are candidates to confirm, not
+                  guaranteed matches. */}
+              {crossPlatform.length > 0 && (
+                <div className="mb-6 p-4 rounded-xl bg-teal-500/5 border border-teal-500/20">
+                  <p className="flex items-center gap-2 text-xs font-bold text-teal-300 uppercase tracking-wider mb-2">
+                    <Layers className="w-3.5 h-3.5" />
+                    Same bug on both platforms?
+                  </p>
+                  <p className="text-[11px] text-neutral-500 mb-3">
+                    These Android and iOS clusters look like one shared issue rather than two client-specific bugs —
+                    worth checking before triaging them separately. Platform is inferred from review wording, so
+                    confirm before merging.
+                  </p>
+                  <div className="space-y-2">
+                    {crossPlatform.slice(0, 5).map((m) => (
+                      <div
+                        key={`${m.android_cluster_id}-${m.ios_cluster_id}`}
+                        className="flex flex-wrap items-center gap-2 text-xs"
+                      >
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[9px] font-black">ANDROID</span>
+                        <span className="text-neutral-300 truncate max-w-[16rem]">{m.android_title}</span>
+                        <span className="text-neutral-600">↔</span>
+                        <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 text-[9px] font-black">IOS</span>
+                        <span className="text-neutral-300 truncate max-w-[16rem]">{m.ios_title}</span>
+                        <span className="text-neutral-500 text-[10px]">{(m.confidence * 100).toFixed(0)}% similar</span>
                       </div>
-                      <div className="space-y-3 pl-5">
-                        {bucket.map((cluster, idx) => renderRow(cluster, idx, delay + 0.1))}
-                      </div>
-                    </motion.div>
-                  );
-                })}
-              </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Cluster list — severity buckets, or one flat priority ranking */}
+              {sortMode === 'triage' ? (
+                <div>
+                  <div className="flex items-center gap-2 mb-4">
+                    <Zap className="w-3.5 h-3.5 text-white" />
+                    <h4 className="text-sm font-bold text-white uppercase tracking-wider">
+                      Ranked by priority ({analytics.clusters!.length})
+                    </h4>
+                  </div>
+                  <div className="space-y-3">
+                    {[...analytics.clusters!]
+                      .sort((a, b) =>
+                        (triageScores.get(b.id)?.score ?? -1) - (triageScores.get(a.id)?.score ?? -1)
+                      )
+                      .map((cluster, idx) => renderRow(cluster, idx, 0.5))}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {severities.map(({ key, label, dotCls, textCls, delay }) => {
+                    const bucket = analytics.clusters!.filter(c => c.severity === key);
+                    if (bucket.length === 0) return null;
+                    return (
+                      <motion.div
+                        key={key}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay, duration: 0.4 }}
+                      >
+                        <div className="flex items-center gap-2 mb-4">
+                          <div className={`w-3 h-3 rounded-full ${dotCls}`} />
+                          <h4 className={`text-sm font-bold ${textCls} uppercase tracking-wider`}>
+                            {label} ({bucket.length})
+                          </h4>
+                        </div>
+                        <div className="space-y-3 pl-5">
+                          {bucket.map((cluster, idx) => renderRow(cluster, idx, delay + 0.1))}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
             </SpotlightCard>
           </motion.div>
         );

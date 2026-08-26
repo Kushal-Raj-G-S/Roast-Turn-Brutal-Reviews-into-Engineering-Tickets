@@ -73,9 +73,16 @@ class Cluster(SQLModel, table=True):
     assigned_to: Optional[str] = Field(default=None)
     assigned_at: Optional[datetime] = Field(default=None)
 
-    # Fix Verification Loop — set by shadow_deployment.py after processing
+    # Fix Verification Loop — set by shadow_deployment.py after processing.
+    # A resolved cluster resurfacing in a later upload means the fix didn't
+    # actually hold; regression_confidence/match_method record how sure the
+    # detector is and whether it caught it via keyword overlap, semantic
+    # similarity, or both (see shadow_deployment.py::_detect_regressions).
     regression_detected: Optional[bool] = Field(default=False)
     regression_of_title: Optional[str] = Field(default=None)
+    regression_confidence: Optional[float] = Field(default=None)
+    regression_match_method: Optional[str] = Field(default=None)  # keyword | semantic | keyword+semantic
+    regression_resolved_at: Optional[datetime] = Field(default=None)  # when the ORIGINAL cluster was marked resolved
     
     created_at: datetime = Field(
         default_factory=datetime.utcnow,

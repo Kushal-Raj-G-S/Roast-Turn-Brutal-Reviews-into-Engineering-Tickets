@@ -5,9 +5,12 @@ Uses 'uploads' table with INTEGER id.
 
 import asyncio
 import logging
+import math
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+
+import numpy as np
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, Depends, BackgroundTasks
 from pydantic import BaseModel
@@ -24,6 +27,46 @@ from app.core.shadow_deployment import schedule_shadow_deployment
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["bulk"])
+
+
+# ---------------------------------------------------------------------------
+# Release-bisected regressions
+# ---------------------------------------------------------------------------
+# `affected_versions` on Cluster is never populated by the live pipeline, but
+# each sample review already carries its own `version` (captured from the
+# CSV's app-version column, when the upload has one -- most don't). Rather
+# than a pipeline/schema change, this derives a best-effort "which version
+# did this start showing up in" directly from sample_reviews on read.
+
+def _parse_version_tuple(v: str) -> Optional[tuple]:
+    """'v4.2.1' / '4.2' -> (4, 2, 1) / (4, 2). None if it doesn't look like a version."""
+    import re
+    m = re.findall(r"\d+", v or "")
+    if not m:
+        return None
+    return tuple(int(x) for x in m[:4])
+
+
+def bisect_versions(sample_reviews: Optional[list[dict]]) -> Optional[dict]:
+    if not sample_reviews:
+        return None
+
+    versions = [r.get("version") for r in sample_reviews if r.get("version")]
+    if not versions:
+        return None
+
+    from collections import Counter
+    counts = Counter(versions)
+
+    parsed = [(v, t) for v in set(versions) if (t := _parse_version_tuple(v)) is not None]
+    earliest = min(parsed, key=lambda x: x[1])[0] if parsed else None
+
+    return {
+        "earliest_version": earliest,
+        "most_common_version": counts.most_common(1)[0][0],
+        "distinct_versions": len(counts),
+        "version_counts": dict(counts.most_common(5)),
+    }
 
 
 # Response models
@@ -67,6 +110,10 @@ class ClusterResponse(BaseModel):
     rca_title: Optional[str] = None
     rca_hypothesis: Optional[str] = None
     created_at: str
+    regression_detected: Optional[bool] = None
+    regression_of_title: Optional[str] = None
+    regression_confidence: Optional[float] = None
+    regression_match_method: Optional[str] = None
 
 
 class ClusterDetailResponse(BaseModel):
@@ -86,6 +133,12 @@ class ClusterDetailResponse(BaseModel):
     sample_reviews: Optional[list[dict]] = None
     ai_metadata: Optional[dict] = None
     created_at: str
+    regression_detected: Optional[bool] = None
+    regression_of_title: Optional[str] = None
+    regression_confidence: Optional[float] = None
+    regression_match_method: Optional[str] = None
+    regression_resolved_at: Optional[str] = None
+    version_bisect: Optional[dict] = None
 
 
 # Dependency to get DB session
@@ -384,10 +437,198 @@ async def get_upload_clusters(
             review_count=c.review_count,
             rca_title=c.rca_title,
             rca_hypothesis=c.rca_hypothesis,
-            created_at=c.created_at.isoformat()
+            created_at=c.created_at.isoformat(),
+            regression_detected=c.regression_detected,
+            regression_of_title=c.regression_of_title,
+            regression_confidence=c.regression_confidence,
+            regression_match_method=c.regression_match_method,
         )
         for c in clusters
     ]
+
+
+# ---------------------------------------------------------------------------
+# Confidence-weighted triage queue
+# ---------------------------------------------------------------------------
+# Severity alone is a coarse, static signal. This fuses four independently-
+# computed things the pipeline already produces -- severity, RAGAS
+# faithfulness (is the RCA actually supported by evidence?), the fix-
+# verification regression signal above, and volume (log-scaled so one huge
+# cluster can't drown out everything else) -- into one ranked "fix this
+# first" score, instead of engineers re-deriving that priority by eye from
+# four separate badges.
+
+_SEVERITY_WEIGHT = {"critical": 100.0, "high": 70.0, "medium": 40.0, "low": 15.0}
+
+
+def _priority_score(c: Cluster) -> float:
+    severity_weight = _SEVERITY_WEIGHT.get((c.severity or "").lower(), 20.0)
+
+    faithfulness = 0.5  # neutral default when no AI eval has run yet
+    if isinstance(c.ai_metadata, dict):
+        eval_scores = c.ai_metadata.get("eval_scores") or {}
+        if isinstance(eval_scores.get("faithfulness"), (int, float)):
+            faithfulness = float(eval_scores["faithfulness"])
+
+    regression_boost = 0.0
+    if c.regression_detected:
+        regression_boost = 30.0 * (c.regression_confidence if c.regression_confidence is not None else 0.5)
+
+    velocity = math.log1p(max(c.review_count or 0, 0)) * 5.0
+
+    return round(severity_weight + faithfulness * 20.0 + regression_boost + velocity, 2)
+
+
+class TriageClusterResponse(ClusterResponse):
+    """ClusterResponse plus the fused priority score and its components."""
+    priority_score: float
+    priority_breakdown: dict
+
+
+class TriageQueueResponse(BaseModel):
+    upload_id: int
+    clusters: list[TriageClusterResponse]
+
+
+@router.get("/uploads/{upload_id}/triage-queue", response_model=TriageQueueResponse)
+async def get_triage_queue(
+    upload_id: int,
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    """
+    All clusters for this upload, ranked by a single fused priority score
+    (severity + AI-evidence faithfulness + fix-verification regression
+    signal + review volume) instead of severity alone.
+    """
+    upload = session.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    if str(upload.user_id) != str(user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to view this upload")
+
+    clusters = session.exec(
+        select(Cluster).where(Cluster.upload_id == upload_id)
+    ).all()
+
+    scored = []
+    for c in clusters:
+        score = _priority_score(c)
+        faithfulness = 0.5
+        if isinstance(c.ai_metadata, dict):
+            eval_scores = c.ai_metadata.get("eval_scores") or {}
+            if isinstance(eval_scores.get("faithfulness"), (int, float)):
+                faithfulness = float(eval_scores["faithfulness"])
+        scored.append(
+            TriageClusterResponse(
+                id=c.id,
+                title=c.title,
+                severity=c.severity,
+                status=c.status,
+                review_count=c.review_count,
+                rca_title=c.rca_title,
+                rca_hypothesis=c.rca_hypothesis,
+                created_at=c.created_at.isoformat(),
+                regression_detected=c.regression_detected,
+                regression_of_title=c.regression_of_title,
+                regression_confidence=c.regression_confidence,
+                regression_match_method=c.regression_match_method,
+                priority_score=score,
+                priority_breakdown={
+                    "severity_weight": _SEVERITY_WEIGHT.get((c.severity or "").lower(), 20.0),
+                    "faithfulness": faithfulness,
+                    "regression_boost": 30.0 * (c.regression_confidence or 0.5) if c.regression_detected else 0.0,
+                    "velocity": round(math.log1p(max(c.review_count or 0, 0)) * 5.0, 2),
+                },
+            )
+        )
+
+    scored.sort(key=lambda x: x.priority_score, reverse=True)
+    return TriageQueueResponse(upload_id=upload_id, clusters=scored)
+
+
+# ---------------------------------------------------------------------------
+# Cross-platform bug fusion
+# ---------------------------------------------------------------------------
+# There's no structured platform column in the pipeline (see NEW_ARCHITECTURE_
+# CHANGES.md §14/exploration) -- platform is only ever heuristically inferred
+# from cluster title/keywords via explanation_pregenerate._detect_platform.
+# This is explicitly best-effort: it flags candidates for a human to confirm,
+# not a guaranteed fusion.
+
+_CROSS_PLATFORM_THRESHOLD = 0.60
+
+
+class CrossPlatformMatch(BaseModel):
+    android_cluster_id: int
+    android_title: str
+    ios_cluster_id: int
+    ios_title: str
+    confidence: float
+
+
+class CrossPlatformMatchesResponse(BaseModel):
+    upload_id: int
+    matches: list[CrossPlatformMatch]
+
+
+@router.get("/uploads/{upload_id}/cross-platform-matches", response_model=CrossPlatformMatchesResponse)
+async def get_cross_platform_matches(
+    upload_id: int,
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    """
+    Best-effort: flags cluster pairs in this upload that look like the same
+    underlying bug reported separately on Android and iOS, so a shared-
+    backend issue doesn't get triaged twice as two unrelated client bugs.
+    """
+    upload = session.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    if str(upload.user_id) != str(user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to view this upload")
+
+    from app.services.explanation_pregenerate import _detect_platform
+
+    clusters = session.exec(select(Cluster).where(Cluster.upload_id == upload_id)).all()
+    android = [c for c in clusters if _detect_platform(c) == "android"]
+    ios = [c for c in clusters if _detect_platform(c) == "ios"]
+
+    if not android or not ios:
+        return CrossPlatformMatchesResponse(upload_id=upload_id, matches=[])
+
+    try:
+        from app.services.bulk_embedding import EmbeddingBackend
+        backend = EmbeddingBackend()
+        texts = [f"{c.title} {' '.join(c.keywords or [])}" for c in android] + \
+                [f"{c.title} {' '.join(c.keywords or [])}" for c in ios]
+        vecs = backend.encode_batch(texts)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        vecs = vecs / norms
+        android_vecs = vecs[: len(android)]
+        ios_vecs = vecs[len(android):]
+        sim = android_vecs @ ios_vecs.T
+    except Exception as e:
+        logger.warning(f"Cross-platform matching unavailable ({e})")
+        return CrossPlatformMatchesResponse(upload_id=upload_id, matches=[])
+
+    matches = []
+    for i, ac in enumerate(android):
+        for j, ic in enumerate(ios):
+            score = float(sim[i, j])
+            if score >= _CROSS_PLATFORM_THRESHOLD:
+                matches.append(CrossPlatformMatch(
+                    android_cluster_id=ac.id,
+                    android_title=ac.title,
+                    ios_cluster_id=ic.id,
+                    ios_title=ic.title,
+                    confidence=round(score, 3),
+                ))
+
+    matches.sort(key=lambda m: m.confidence, reverse=True)
+    return CrossPlatformMatchesResponse(upload_id=upload_id, matches=matches)
 
 
 # ---------------------------------------------------------------------------
@@ -627,7 +868,13 @@ async def get_cluster_details(
             keywords=cluster.keywords or [],
             sample_reviews=cluster.sample_reviews or [],
             ai_metadata=cluster.ai_metadata,
-            created_at=cluster.created_at.isoformat()
+            created_at=cluster.created_at.isoformat(),
+            regression_detected=cluster.regression_detected,
+            regression_of_title=cluster.regression_of_title,
+            regression_confidence=cluster.regression_confidence,
+            regression_match_method=cluster.regression_match_method,
+            regression_resolved_at=cluster.regression_resolved_at.isoformat() if cluster.regression_resolved_at else None,
+            version_bisect=bisect_versions(cluster.sample_reviews),
         )
         
     except HTTPException:
@@ -666,3 +913,107 @@ async def health_check_db():
     except Exception as e:
         logger.error(f"Health check error: {e}")
         return {"status": "error", "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Proactive alerting settings
+# ---------------------------------------------------------------------------
+
+class AlertSettingsResponse(BaseModel):
+    alert_webhook_url: Optional[str] = None
+    alerts_enabled: bool = True
+
+
+class AlertSettingsUpdate(BaseModel):
+    alert_webhook_url: Optional[str] = None
+    alerts_enabled: Optional[bool] = None
+
+
+@router.get("/settings/alerts", response_model=AlertSettingsResponse)
+async def get_alert_settings(user: Profile = Depends(get_current_user)):
+    return AlertSettingsResponse(
+        alert_webhook_url=user.alert_webhook_url,
+        alerts_enabled=bool(user.alerts_enabled) if user.alerts_enabled is not None else True,
+    )
+
+
+@router.put("/settings/alerts", response_model=AlertSettingsResponse)
+async def update_alert_settings(
+    body: AlertSettingsUpdate,
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    profile = session.get(Profile, user.id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    if body.alert_webhook_url is not None:
+        url = body.alert_webhook_url.strip()
+        if url and not (url.startswith("https://hooks.slack.com/") or url.startswith("https://discord.com/api/webhooks/") or url.startswith("https://discordapp.com/api/webhooks/")):
+            raise HTTPException(status_code=400, detail="Must be a Slack incoming-webhook or Discord webhook URL")
+        profile.alert_webhook_url = url or None
+    if body.alerts_enabled is not None:
+        profile.alerts_enabled = body.alerts_enabled
+
+    session.add(profile)
+    session.commit()
+    session.refresh(profile)
+
+    return AlertSettingsResponse(
+        alert_webhook_url=profile.alert_webhook_url,
+        alerts_enabled=bool(profile.alerts_enabled),
+    )
+
+
+class TestStubResponse(BaseModel):
+    cluster_id: int
+    code: str
+
+
+@router.post("/clusters/{cluster_id}/test-stub", response_model=TestStubResponse)
+async def generate_cluster_test_stub(
+    cluster_id: int,
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    """
+    Generate a runnable Playwright repro-test skeleton from this cluster's RCA.
+
+    Auth + ownership are enforced here (unlike the read-only cluster
+    endpoints) because every call spends a real LLM request against the
+    shared NVIDIA rate limit -- an unauthenticated version would let anyone
+    burn the whole account's throughput by looping over cluster ids.
+    """
+    from app.services.ai.repro_stub_generator import generate_test_stub
+
+    cluster = session.get(Cluster, cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    upload = session.get(Upload, cluster.upload_id)
+    if not upload or str(upload.user_id) != str(user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to use this cluster")
+
+    try:
+        code = await generate_test_stub(cluster)
+    except Exception as e:
+        logger.warning(f"Test stub generation failed for cluster {cluster_id}: {e}")
+        raise HTTPException(status_code=502, detail="Test stub generation failed — try again in a moment")
+
+    return TestStubResponse(cluster_id=cluster_id, code=code)
+
+
+@router.post("/settings/alerts/test")
+async def test_alert_webhook(user: Profile = Depends(get_current_user)):
+    from app.services import notifications
+
+    if not user.alert_webhook_url:
+        raise HTTPException(status_code=400, detail="No webhook URL configured yet")
+
+    ok = await notifications.send_alert(
+        user.alert_webhook_url,
+        "🔥 Roast test alert — if you can see this, your webhook is wired up correctly.",
+    )
+    if not ok:
+        raise HTTPException(status_code=502, detail="Webhook did not accept the test message — double-check the URL")
+    return {"status": "sent"}
