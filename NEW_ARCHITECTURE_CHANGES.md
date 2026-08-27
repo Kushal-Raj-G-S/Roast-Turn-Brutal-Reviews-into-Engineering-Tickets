@@ -481,6 +481,29 @@ Surveyed all 926 clusters in the live database: the heuristic platform detector 
 
 ---
 
+## 17. Cross-platform fusion: switched from cluster-title scanning to per-review device data (2026-08-27)
+
+**Touched:** `backend/app/api/bulk_routes.py`
+
+Section 16.6 found the title-only platform detector data-limited (0 iOS matches ever, across the whole database) and concluded that was a genuine property of the data, not a bug — true as far as it went, but incomplete: it only checked whether the *raw review text* mentioned a platform, not whether a better signal already existed elsewhere in the schema.
+
+While visually verifying release bisect in the UI, a sample review rendered with an explicit **"Android"** badge — from `sample_reviews[].device`, populated per-review by `bulk_processor.py`'s free-text device-keyword extraction (`_extract_device`), completely separate from `explanation_pregenerate._detect_platform`'s cluster-title regex that cross-platform fusion actually used. Querying it directly: **55 of 926 clusters** have at least one review with a populated `device` field, with real iOS signal the title scanner had zero chance of ever finding: `{Android: 27, Ios: 11, Iphone: 4, Samsung: 7, Oppo: 6, Pixel: 5, Huawei: 4, Realme: 2, Xiaomi: 1}`.
+
+### Old
+`get_cross_platform_matches` classified each cluster's platform via `explanation_pregenerate._detect_platform(cluster)` — a regex over the cluster's title and keywords only.
+
+### New
+`_detect_platform_from_reviews(cluster)` classifies by scanning every sample review's `device` field against known Android/iOS device-brand words (`samsung/pixel/oneplus/xiaomi/huawei/oppo/vivo/realme/nokia/galaxy/android` vs `iphone/ios/ipad`). `_detect_platform_combined(cluster)` takes the union of this and the original title-based signal — either is enough to tag a cluster, since they're independent evidence sources, not competing guesses. A cluster where one signal says "android" and the other says "ios" (or either alone says "both") is tagged `"both"` and appears as a candidate on each side.
+
+**A cluster tagged `"both"` introduced a real bug during the fix**: it appears in *both* the android and ios candidate lists, so without a guard it matches against itself at cosine similarity 1.0, "discovering" that a cluster is the same bug as itself. Fixed with an explicit `ac.id == ic.id` skip in the pairwise comparison loop, caught before it ever shipped by reasoning through the combined-list construction rather than by a failing test.
+
+### Verified
+- Combined detector across the live database: Android detections **6 → 42**, iOS **0 → 12** (one cluster genuinely qualifies for `"both"`).
+- The two real android/ios candidate pairs that existed in the account's own uploads were checked and correctly rejected (cosine similarity 0.287 and 0.145 — genuinely unrelated bugs; the fix widens *recall* of candidates, it doesn't relax the *matching* threshold, so it doesn't fabricate matches where none exist).
+- No upload in the real data happened to contain a genuine same-bug-different-platform pair to demonstrate a true positive, so one was constructed the same way section 16.5 verified the fix-verification loop: a synthetic Android cluster ("photos fail to upload and app freezes", device=Samsung) and iOS cluster ("cannot upload any picture, app locks up", device=Iphone) describing the same bug in different words. Confirmed rendering live in the analytics UI: **"Same bug on both platforms?" — ANDROID ↔ IOS, 67% similar.** Test upload and both clusters deleted afterward.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |

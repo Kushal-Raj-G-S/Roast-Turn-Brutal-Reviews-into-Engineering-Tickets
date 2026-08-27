@@ -551,10 +551,51 @@ async def get_triage_queue(
 # Cross-platform bug fusion
 # ---------------------------------------------------------------------------
 # There's no structured platform column in the pipeline (see NEW_ARCHITECTURE_
-# CHANGES.md §14/exploration) -- platform is only ever heuristically inferred
-# from cluster title/keywords via explanation_pregenerate._detect_platform.
-# This is explicitly best-effort: it flags candidates for a human to confirm,
-# not a guaranteed fusion.
+# CHANGES.md §14/exploration) -- platform is inferred two ways and combined:
+# explanation_pregenerate._detect_platform scans the cluster TITLE, which
+# almost never mentions a platform (titles summarize the bug, not the
+# device); each review's own `device` field (populated by bulk_processor.py
+# from free-text device-keyword matching, e.g. "Samsung"/"iPhone") is a far
+# better signal and was sitting unused -- a live-data survey found it
+# populated with real iOS signal (Ios/Iphone) on clusters the title-only
+# detector had zero chance of ever catching (see NEW_ARCHITECTURE_CHANGES.md
+# §17). Either signal is enough to tag a cluster; this stays best-effort --
+# flags candidates for a human to confirm, not a guaranteed fusion.
+
+_ANDROID_DEVICE_WORDS = {"samsung", "pixel", "oneplus", "xiaomi", "huawei", "oppo", "vivo", "realme", "nokia", "galaxy", "android"}
+_IOS_DEVICE_WORDS = {"iphone", "ios", "ipad"}
+
+
+def _detect_platform_from_reviews(cluster: Cluster) -> str:
+    has_android = False
+    has_ios = False
+    for r in (cluster.sample_reviews or []):
+        d = (r.get("device") or "").strip().lower()
+        if d in _ANDROID_DEVICE_WORDS:
+            has_android = True
+        elif d in _IOS_DEVICE_WORDS:
+            has_ios = True
+    if has_android and has_ios:
+        return "both"
+    if has_android:
+        return "android"
+    if has_ios:
+        return "ios"
+    return "unknown"
+
+
+def _detect_platform_combined(cluster: Cluster) -> str:
+    """Union of the title-based and review-device-based signals."""
+    from app.services.explanation_pregenerate import _detect_platform
+
+    platforms = {_detect_platform(cluster), _detect_platform_from_reviews(cluster)}
+    platforms.discard("unknown")
+    if len(platforms) > 1 or "both" in platforms:
+        return "both"
+    if platforms:
+        return platforms.pop()
+    return "unknown"
+
 
 _CROSS_PLATFORM_THRESHOLD = 0.60
 
@@ -589,11 +630,9 @@ async def get_cross_platform_matches(
     if str(upload.user_id) != str(user.id):
         raise HTTPException(status_code=403, detail="Not authorized to view this upload")
 
-    from app.services.explanation_pregenerate import _detect_platform
-
     clusters = session.exec(select(Cluster).where(Cluster.upload_id == upload_id)).all()
-    android = [c for c in clusters if _detect_platform(c) == "android"]
-    ios = [c for c in clusters if _detect_platform(c) == "ios"]
+    android = [c for c in clusters if _detect_platform_combined(c) in ("android", "both")]
+    ios = [c for c in clusters if _detect_platform_combined(c) in ("ios", "both")]
 
     if not android or not ios:
         return CrossPlatformMatchesResponse(upload_id=upload_id, matches=[])
@@ -617,6 +656,11 @@ async def get_cross_platform_matches(
     matches = []
     for i, ac in enumerate(android):
         for j, ic in enumerate(ios):
+            if ac.id == ic.id:
+                # A cluster tagged "both" (has device evidence for android
+                # AND ios) appears in both lists -- without this it would
+                # trivially "match" itself at cosine similarity 1.0.
+                continue
             score = float(sim[i, j])
             if score >= _CROSS_PLATFORM_THRESHOLD:
                 matches.append(CrossPlatformMatch(
