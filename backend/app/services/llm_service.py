@@ -214,11 +214,19 @@ class LLMService:
         persona_label: Optional[str] = None,
     ) -> Optional[str]:
         """Call NVIDIA's OpenAI-compatible API with a small retry window."""
-        # Large-budget calls already get a longer per-attempt timeout below
-        # (they need it to succeed at all) -- only 1 retry for those, so a
-        # genuine outage still fails in ~1x the scaled timeout instead of 2x
-        # stacking back up toward the 60s+ worst case this was fixing.
-        max_retries = 1 if max_tokens > 800 else 2
+        # Reverted an over-correction: this used to drop to 1 retry for
+        # large-budget calls to bound worst-case latency, but that traded
+        # away real resilience for no good reason -- a single transient
+        # `503 Service temporarily overloaded` (which NVIDIA actually
+        # returns periodically, confirmed in production logs) now had ZERO
+        # chance to recover, since attempt 1 was also the only attempt. The
+        # nested-retry problem this whole retry logic exists to avoid (see
+        # the client's max_retries=0 above) was about the SDK's own retries
+        # stacking inside ours, not about having 2 attempts at this layer --
+        # that distinction got lost when this was "simplified" to 1. Kept
+        # at 2 for every call size; the scaled timeout below is what large
+        # calls actually needed.
+        max_retries = 2
         effective_model = model or self.model
         effective_temperature = 0.2 if temperature is None else temperature
 

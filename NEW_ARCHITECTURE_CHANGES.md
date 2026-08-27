@@ -585,6 +585,26 @@ Fixed by scaling both knobs to the actual token budget instead of using one numb
 
 ---
 
+## 21. §20's retry-count reduction was itself an over-correction; plus real output-format variance needed its own retry (2026-08-27)
+
+**Touched:** `backend/app/services/llm_service.py`, `backend/app/services/ai/repro_stub_generator.py`
+
+The very next real click after §20 shipped failed again -- a third distinct failure mode in three consecutive rounds, each one only visible by actually looking at what broke rather than assuming the previous fix covered it.
+
+### 21.1 `max_retries=1` for large-budget calls removed real resilience
+The actual error this time: `HTTP 503 - {"message": "Service temporarily overloaded"}` -- a genuine, if transient, condition on NVIDIA's side, not a timeout, not truncation, not the fabricated-API bug. §20 had dropped `max_retries` from 2 to 1 for calls with `max_tokens > 800`, reasoning that large calls already get a longer per-attempt timeout so retrying twice would stack worst-case latency back up. That reasoning conflated two different problems: the *nested*-retry issue from §19 (the SDK's own retries running inside ours, `max_retries=0` on the client already fixes that) has nothing to do with *how many attempts our own loop gets*. Cutting our own loop to 1 attempt meant a single transient 503 -- exactly the case retries exist for -- had zero chance to recover. Reverted to `max_retries = 2` for every call size; the scaled timeout from §20 was the fix that actually mattered.
+
+### 21.2 The model doesn't format identically across samples, even at temperature=0.2
+Re-running a reliability sweep to confirm 21.1 turned up a fourth thing: cluster 911 failed with "model response had no code block" -- the API call succeeded, but this particular sample's output didn't close its code fence the way every other sample that session had. Re-running the *identical* prompt moments later produced a cleanly fenced response. `llm.generate()`'s own retry logic only covers API/network-level failures; a successful-but-malformed response was invisible to it. Added a small retry loop inside `generate_test_stub` itself, scoped specifically to this failure mode (empty response, or no matching code fence) -- 2 attempts total, since a second consecutive miss is a much stronger signal something's actually wrong than one sample being unlucky.
+
+### Verified
+- Same cluster that had just failed with the 503 (1159) succeeded in 31.8s.
+- Cluster 911 (the no-code-block failure) succeeded on the next attempt in 13.4s with the new retry loop in place.
+- Full 5-cluster sweep, spaced 2s apart (not the zero-spacing that produced false "Connection error" positives in §20): **5/5 succeeded**, 14.3-42.9s range, zero fabricated APIs.
+- Independently, the user pasted back a second real generated test (a different cluster, a network/offline bug) for review before this round even started: `page.context().setOffline(true/false)` -- confirmed as a genuine Playwright API (unlike §20's fabricated `setNetworkConditions`), correctly grounded in the actual review text, proper structure throughout. The §20 guardrail is generalizing correctly across different bug types, not just the one cluster it was fixed against.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |

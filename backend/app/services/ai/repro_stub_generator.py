@@ -76,19 +76,35 @@ async def generate_test_stub(cluster: Cluster) -> str:
     # mid-file with no closing fence on a moderately detailed cluster. 3000
     # leaves enough room for both the reasoning and a complete ~40-70 line
     # test file.
-    result = await llm.generate(prompt, max_tokens=3000, temperature=0.2)
+    #
+    # One retry specifically for "the API call succeeded but the response
+    # had no valid code fence" -- llm.generate() already retries on its own
+    # for network/server errors (timeouts, 503s), but a malformed-yet-
+    # successful response is a different failure mode it can't see, and
+    # this model doesn't format the same way on every sample even at
+    # temperature=0.2 (observed: identical prompt, one run fenced cleanly,
+    # the next didn't). Only 1 extra attempt -- if it fails twice in a row
+    # that's a stronger signal something's actually wrong, not just noise.
+    last_error = None
+    for attempt in range(2):
+        result = await llm.generate(prompt, max_tokens=3000, temperature=0.2)
 
-    if result == FALLBACK_MESSAGE or not result.strip():
-        raise RuntimeError("Test stub generation failed (LLM call did not return usable output)")
+        if result == FALLBACK_MESSAGE or not result.strip():
+            last_error = "LLM call did not return usable output"
+            continue
 
-    # The configured model (a reasoning model) ignores "output only code, no
-    # prose" instructions in practice -- it reliably prepends its full
-    # chain-of-thought before the fenced code block regardless of prompting.
-    # Extract just the code rather than trust the instruction was followed;
-    # returning the raw response would dump several KB of reasoning prose
-    # into what's supposed to be a code box in the UI.
-    match = _CODE_FENCE.search(result)
-    if not match:
-        raise RuntimeError("Test stub generation failed (model response had no code block)")
+        # The configured model (a reasoning model) ignores "output only
+        # code, no prose" instructions in practice -- it reliably prepends
+        # its full chain-of-thought before the fenced code block regardless
+        # of prompting. Extract just the code rather than trust the
+        # instruction was followed; returning the raw response would dump
+        # several KB of reasoning prose into what's supposed to be a code
+        # box in the UI.
+        match = _CODE_FENCE.search(result)
+        if not match:
+            last_error = "model response had no code block"
+            continue
 
-    return match.group(1).strip()
+        return match.group(1).strip()
+
+    raise RuntimeError(f"Test stub generation failed after retry ({last_error})")
