@@ -644,6 +644,22 @@ Reproduced the exact failure with a coordinate-accurate synthetic drag (confirme
 
 ---
 
+## 24. Repro-stub generator: the malformed-output retry loop had no backoff (2026-08-27)
+
+**Touched:** `backend/app/services/ai/repro_stub_generator.py`
+
+Reviewing `generate_test_stub`'s retry logic (§21.2 added it for "API call succeeded but response had no code fence") turned up a gap: the 2-attempt loop retries **immediately**, with no delay between attempts — inconsistent with `_call_nvidia_api` one layer down, which already backs off (`2 ** attempt` seconds) between its own retries specifically because NVIDIA's transient `503 Service temporarily overloaded` bursts (documented in §19/§21.1) need real wall-clock time to clear, not just another attempt.
+
+This matters because `llm.generate()` itself never raises — on total failure (e.g. a 503 burst that outlasts `_call_nvidia_api`'s own 2-attempt/backoff window) it swallows the exception and returns `FALLBACK_MESSAGE` instead. `generate_test_stub`'s loop already handled that case (`if result == FALLBACK_MESSAGE: continue`), but firing the retry instantly meant a genuine overload-burst failure got retried straight back into the same burst window, wasting the one extra attempt this loop exists to provide.
+
+### Fix
+Added a 2-second `asyncio.sleep` before the second attempt only (not before the first, and not after the final failure — no point delaying a call that's about to raise anyway), with a log line naming what the previous attempt failed with. Mirrors the backoff style already used in `_call_nvidia_api`, just one layer up.
+
+### Verified
+Restarted the backend to load the change, confirmed clean startup (`GET /docs` → 200, no import errors), then called the real endpoint end-to-end against production cluster 407 with a live auth token pulled from the browser session: `POST /clusters/407/test-stub` → `200 OK` in 24.7s, returning a correctly structured Playwright stub (`test.describe`, `beforeEach`, an honest `TODO: WhatsApp Web URL` placeholder rather than a fabricated selector — the §20.1 guardrail still holding). Succeeded on the first attempt, confirming the added backoff doesn't touch the happy path — it only ever fires on retry.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -670,3 +686,4 @@ Reproduced the exact failure with a coordinate-accurate synthetic drag (confirme
 | Cross-platform | Android/iOS versions of one bug triaged as two unrelated issues | Best-effort "same bug on both platforms?" candidate flagging |
 | Kanban board | Rendered columns only — no drag persistence, no API calls | Real drag-and-drop, persists via `PATCH /clusters/{id}/status`, optimistic update with revert-on-failure |
 | Kanban columns / ordering | 3 visual columns (2 real statuses unreachable); cards in query order | All 5 real statuses as columns; cards ranked by the same fused priority score as `/triage-queue` |
+| Repro-stub malformed-output retry | Immediate retry, no backoff | 2s backoff before the retry, matching `_call_nvidia_api`'s pattern |

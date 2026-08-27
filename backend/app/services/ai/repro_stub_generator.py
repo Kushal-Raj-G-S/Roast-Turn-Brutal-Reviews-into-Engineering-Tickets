@@ -15,10 +15,14 @@ than silently returning something misleading (unlike RCA generation, there's
 no safe "fallback text" for a test stub -- a wrong one is worse than none).
 """
 
+import asyncio
+import logging
 import re
 
 from app.services.llm_service import get_llm_service, FALLBACK_MESSAGE
 from app.models.bulk_models import Cluster
+
+logger = logging.getLogger(__name__)
 
 _CODE_FENCE = re.compile(r"```(?:typescript|ts)?\s*\n(.*?)```", re.DOTALL)
 
@@ -85,8 +89,20 @@ async def generate_test_stub(cluster: Cluster) -> str:
     # temperature=0.2 (observed: identical prompt, one run fenced cleanly,
     # the next didn't). Only 1 extra attempt -- if it fails twice in a row
     # that's a stronger signal something's actually wrong, not just noise.
+    #
+    # A short backoff before that retry, not just an immediate re-call:
+    # generate() also swallows total failure (a transient 503 burst that
+    # outlasts its own internal 2-attempt/backoff window) and returns
+    # FALLBACK_MESSAGE rather than raising -- retrying that instantly just
+    # re-hits the same overload window NVIDIA was still in. _call_nvidia_api
+    # already backs off between ITS attempts; this loop was the one layer
+    # that didn't, despite wrapping the same class of transient failure.
     last_error = None
     for attempt in range(2):
+        if attempt > 0:
+            logger.info(f"Retrying test stub generation after backoff -- previous attempt failed: {last_error}")
+            await asyncio.sleep(2)
+
         result = await llm.generate(prompt, max_tokens=3000, temperature=0.2)
 
         if result == FALLBACK_MESSAGE or not result.strip():
