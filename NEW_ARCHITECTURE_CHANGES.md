@@ -561,6 +561,30 @@ The exact same class of bug already fixed for `repro_stub_generator.py` (§16.3)
 
 ---
 
+## 20. Two more real bugs from actually reading generated output: a fabricated Playwright API, and a timeout too tight for its own fix (2026-08-27)
+
+**Touched:** `backend/app/services/ai/repro_stub_generator.py`, `backend/app/services/llm_service.py`
+
+The user tried the repro-stub generator again after §19's fixes, landed comfortably under the new ~30s ceiling, and pasted the actual generated code back for review instead of just reporting "it worked." Reading it (not just checking that it ran) surfaced two more real issues.
+
+### 20.1 A fabricated Playwright API
+The bug being tested was "app fails to load on mobile data (works over Wi-Fi)" -- reproducing it requires throttling network conditions, which the model handled by calling `context.setNetworkConditions({...})`. **This method does not exist on Playwright's `BrowserContext`.** Real network throttling in Playwright requires a CDP session (`context.newCDPSession(page)`, then `session.send('Network.emulateNetworkConditions', {...})`, Chromium-only) or isn't simulatable at all for some conditions (device GPS, real cellular radios). Run as-is, the generated test would fail with `TypeError: context.setNetworkConditions is not a function` on line 1, before ever reaching the assertion that mattered.
+
+The existing guardrail ("never fabricate selectors, URLs, or test data... use TODO placeholders") only covered fabricated *content*, not fabricated *framework APIs* -- a gap, since a plausible-sounding-but-nonexistent method is the same category of dishonesty as a plausible-sounding-but-nonexistent selector. Added an explicit rule: stick to the well-documented Playwright core surface; for anything requiring a CDP session or a real device capability Playwright can't simulate, say so in a comment rather than inventing a clean-looking method.
+
+**A self-inflicted bug while writing that fix**: the added guardrail text included literal `{...}` illustrating the CDP session call, and `_PROMPT_TEMPLATE` is a Python `.format()` string -- unescaped braces in the template broke every single call with `IndexError: Replacement index 0 out of range`. Caught immediately by re-running the exact prompt that had just produced the bad output, before it ever reached a real request. Fixed by rewording the guardrail without literal braces rather than escaping them, since the failure mode (an editor forgetting to double an added brace later) was worth removing structurally, not just patching once.
+
+**Verified**: regenerated the exact cluster that had produced `setNetworkConditions` -- the corrected output now uses a real `newCDPSession` + `Network.emulateNetworkConditions` pattern, wrapped in a clean reusable helper function, with an added third test case (offline handling) still properly grounded in the RCA evidence.
+
+### 20.2 The retry fix from §19 had exposed a second problem: 15s alone is too tight for a 3000-token call
+Regenerating that same cluster to verify 20.1 failed three times in a row, consistently at ~31-33s -- not the flaky, load-dependent failures diagnosed in §19, but a systematic one. Root cause: `self.timeout = 15.0` was one fixed value for every call regardless of `max_tokens`, tuned against the old 8B instruct model. The current reasoning model routinely needs more than 15s per attempt once `max_tokens` is large enough to include real thinking room (repro stubs, structured RCA, RAGAS all use 3000). Before §19's `max_retries=0` fix, the SDK's own nested internal retries were incidentally providing extra attempts that sometimes got lucky within the 15s window; removing that nesting (correctly, for the reason in §19) also removed the accidental extra chances, so calls that were always borderline started failing every time instead of intermittently.
+
+Fixed by scaling both knobs to the actual token budget instead of using one number for everything: `effective_timeout = 15s` for `max_tokens <= 800` (explain, playground, RAGAS reasoning -- unaffected, stay fast), else `max(15s, max_tokens / 60)` (3000 tokens -> 50s per attempt); and `max_retries` drops from 2 to 1 once `max_tokens > 800`, so a genuine outage on a large-budget call still fails in ~1x the scaled timeout instead of stacking back toward the multi-layer-retry problem §19 had just fixed.
+
+**Verified**: the same cluster that failed 3/3 times succeeded in 24.5s immediately after the fix. A 5-cluster reliability sweep run back-to-back with zero spacing hit 2 immediate "Connection error" failures -- re-running those same two clusters in isolation (one call, no concurrent load) both succeeded in 36.7s and 41.3s, confirming the failures were an artifact of firing 5 large requests in a tight loop (not how a real user clicks a single "Generate test" button) rather than a regression from this fix.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |

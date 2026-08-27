@@ -214,7 +214,11 @@ class LLMService:
         persona_label: Optional[str] = None,
     ) -> Optional[str]:
         """Call NVIDIA's OpenAI-compatible API with a small retry window."""
-        max_retries = 2
+        # Large-budget calls already get a longer per-attempt timeout below
+        # (they need it to succeed at all) -- only 1 retry for those, so a
+        # genuine outage still fails in ~1x the scaled timeout instead of 2x
+        # stacking back up toward the 60s+ worst case this was fixing.
+        max_retries = 1 if max_tokens > 800 else 2
         effective_model = model or self.model
         effective_temperature = 0.2 if temperature is None else temperature
 
@@ -235,6 +239,17 @@ class LLMService:
                 f"(Style reference: {persona_label or effective_model}. Temperature: {effective_temperature:.1f}.)"
             )
 
+        # self.timeout (15s) was tuned against the old 8B instruct model's
+        # typical latency. The current reasoning model spends real time on
+        # hidden chain-of-thought before any output -- verified 3/3 calls at
+        # max_tokens=3000 (repro_stub_generator, structured_rca, RAGAS) each
+        # consistently need 25-35s+, well past 15s, and would spuriously
+        # time out on every attempt otherwise (masked before the max_retries=0
+        # fix by the SDK's own nested retries occasionally getting lucky on a
+        # later attempt). Small calls (explain, playground, RAGAS reasoning)
+        # stay on the tight 15s default; only large-budget calls get more room.
+        effective_timeout = self.timeout if max_tokens <= 800 else max(self.timeout, max_tokens / 60.0)
+
         for attempt in range(max_retries):
             try:
                 completion = await self.client.chat.completions.create(
@@ -253,6 +268,7 @@ class LLMService:
                     top_p=0.7,
                     max_tokens=max_tokens,
                     stream=False,
+                    timeout=effective_timeout,
                 )
 
                 if completion.choices:
