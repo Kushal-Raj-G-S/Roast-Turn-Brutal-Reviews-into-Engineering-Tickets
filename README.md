@@ -223,6 +223,14 @@
 
   **Optional environment variables:**
   ```
+  NVIDIA_MODEL          Override the NVIDIA NIM model (default: nvidia/nemotron-3-super-120b-a12b —
+                        chosen because it's one of the few models on the free-tier catalog that
+                        supports both plain generation AND Instructor structured/tool-calling
+                        output, which RCA generation requires). If NVIDIA deprecates this one too,
+                        list your account's invokable models with a GET to
+                        {NVIDIA_API_URL}/models, then verify a candidate actually supports
+                        structured output before switching — several models that answer plain
+                        prompts fine return a tool-call format Instructor can't parse.
   HUGGINGFACE_API_KEY  Only used if EMBEDDING_BACKEND=hf_api is explicitly set
                         (local ONNX embedding is the default, no key needed)
   EMBEDDING_BACKEND    torch | hf_api — override the default local ONNX embedding path

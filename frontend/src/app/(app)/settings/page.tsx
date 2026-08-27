@@ -60,7 +60,8 @@ export default function SettingsPage() {
 
     // Load current alert webhook settings
     setWebhookStatus("loading");
-    apiClient.getAlertSettings()
+    ensureFreshToken()
+      .then(() => apiClient.getAlertSettings())
       .then((s) => {
         setWebhookUrl(s.alert_webhook_url || "");
         setAlertsEnabled(s.alerts_enabled);
@@ -69,10 +70,21 @@ export default function SettingsPage() {
       .catch(() => setWebhookStatus("idle"));
   }, []);
 
+  // apiClient falls back to a token cached in localStorage from whatever
+  // session last called setToken() -- fine for pages that already fetch a
+  // fresh Supabase session before every call (e.g. analytics.tsx), but this
+  // page didn't, so it was silently reusing a long-expired token and every
+  // request 401'd with "token is expired". getSession() refreshes if needed.
+  const ensureFreshToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) apiClient.setToken(session.access_token);
+  };
+
   const saveWebhook = async () => {
     setWebhookStatus("saving");
     setWebhookError(null);
     try {
+      await ensureFreshToken();
       await apiClient.updateAlertSettings({ alert_webhook_url: webhookUrl || null, alerts_enabled: alertsEnabled });
       setWebhookStatus("saved");
       setTimeout(() => setWebhookStatus("idle"), 2000);
@@ -86,6 +98,7 @@ export default function SettingsPage() {
     setWebhookStatus("testing");
     setWebhookError(null);
     try {
+      await ensureFreshToken();
       await apiClient.testAlertWebhook();
       setWebhookStatus("tested");
       setTimeout(() => setWebhookStatus("idle"), 2500);

@@ -436,6 +436,51 @@ A second, quieter version of the same class of problem: the stub generator was o
 
 ---
 
+## 16. Live testing pass on section 15 — one critical unrelated bug found, two real bugs in the new stub generator fixed (2026-08-27)
+
+**Touched:** `backend/app/services/llm_service.py`, `backend/app/services/ai/structured_rca.py`, `backend/app/services/ai/evaluation.py`, `backend/app/services/ai/repro_stub_generator.py`, `backend/.env` (not committed — gitignored), `frontend/src/app/(app)/settings/page.tsx`
+
+Manually exercising every feature from section 15 against the real database and a real Discord webhook surfaced three genuine bugs — none of them things a type-checker or a syntax check could have caught.
+
+### 16.1 Critical, unrelated: the whole product's LLM model was dead
+
+Clicking "Generate test" for the first time returned a clean error instead of a stub. Root cause traced directly: **`meta/llama-3.1-8b-instruct` — the model hardcoded as the default everywhere in the codebase — reached end-of-life on NVIDIA's side on 2026-08-26 and now returns `410 Gone` on every call.** This wasn't specific to the new stub feature: it silently broke RCA generation, the AI Debug Center playground, and RAGAS evaluation too, the moment NVIDIA flipped the switch.
+
+Queried `GET {NVIDIA_API_URL}/models` for what's actually invokable on this account, then verified candidates against the harder real requirement (Instructor structured/tool-calling output, which RCA generation needs) rather than just "does it answer a prompt":
+- `meta/llama-3.2-11b-vision-instruct` — answers plain prompts fine, but returns Llama 3.2's non-OpenAI-compatible `<|python_tag|>{...}` tool-call format, which Instructor cannot parse. Fails the RCA path silently different from how it looks in a quick manual test.
+- `nvidia/nemotron-3.5-lightning-30b-a3b` — passed an isolated structured-output test in 5.1s, looked like the obvious "smaller and faster" choice. Measured on the **actual 5-step RCA agent pipeline** (not an isolated call) it was slower and less reliable than the alternative below: 64–118s per cluster, including one outright truncation failure.
+- **`nvidia/nemotron-3-super-120b-a12b`** — supports structured output correctly, and despite being the largest model tested, was the fastest and most reliable in the real pipeline once warm: ~22–26s/cluster (a one-time ~48s cost the first time a process loads the cross-encoder reranker doesn't recur per-request).
+
+Fixed the hardcoded default in all three files (was duplicated independently in `llm_service.py`, `structured_rca.py`, `evaluation.py`) to the verified-working model, and documented the tradeoff in-line so a future "let's use the small fast one" instinct doesn't quietly regress this again. `NVIDIA_MODEL` remains an env-var override (in `.gitignore`d `.env`, not committed) for whenever NVIDIA deprecates this one too.
+
+### 16.2 Repro test stub: reasoning leak into the code box
+
+First real generation returned ~6KB of the model's chain-of-thought ("We need to produce a Playwright test... The bug report is extremely vague...") *before* the actual code, despite the prompt explicitly saying "output ONLY the code, no prose before or after." The configured model is a reasoning model and does not reliably follow that instruction. **Fixed by not trusting the instruction** — a regex now extracts just the fenced ` ```typescript ` block from the response; if no complete fenced block is found, the call now raises instead of returning raw reasoning text into what's rendered as a code box in the UI.
+
+### 16.3 Repro test stub: silent truncation on richer clusters
+
+With the code-extraction fix in place, a cluster with more detailed RCA steps failed with "no code block found." Root cause: the original `max_tokens=1400` budget wasn't enough for this reasoning model to *both* think through the problem *and* write a complete file — the response was cut off mid-code with no closing fence, and (correctly, per the fix above) no half-formed code was returned instead of failing outright. Raised to `max_tokens=3000`, which leaves enough headroom for both. Re-verified across 5 different clusters (mix of vague one-line complaints and detailed multi-review reports) with zero truncations afterward.
+
+While fixing this, also acted on direct feedback that the original output was too thin to be useful (a single unstructured `test()` block) — the prompt now asks for a `test.describe` block, a `beforeEach` for shared setup, each action individually commented against the specific RCA step or review quote that justifies it, and one additional grounded edge-case test when the evidence supports it. Still holds the line on the one guardrail that actually matters: never fabricate a selector, URL, or test data not implied by the bug report — `TODO` placeholders only.
+
+### 16.4 A pre-existing stale-token bug, found while testing the alert settings UI
+
+Clicking "Send test alert" in Settings returned `Could not validate credentials: ... token is expired`, even though the user was actively logged in. Root cause: `apiClient` falls back to a token cached in `localStorage` from whatever session last called `setToken()` — every other page that calls the backend directly (e.g. `analytics/page.tsx`) fetches a fresh Supabase session and calls `setToken()` before each call; the new Settings alert UI didn't, so it was silently reusing a long-expired token. Fixed by adding the same `ensureFreshToken()` pattern (calls `supabase.auth.getSession()`, which auto-refreshes, immediately before every alert-settings API call).
+
+### 16.5 Full end-to-end verification of the fix-verification loop (section 15.1)
+
+Rather than trust the unit-level semantic-similarity numbers from section 15.1 in isolation, ran the actual code path against the real database and a real webhook: marked a real resolved cluster (`"[CRITICAL] App crashes"`) as `resolved`, created a new cluster with a paraphrased title (`"the app keeps freezing and shutting down unexpectedly"` — zero shared keywords), ran the real `_detect_regressions`, and confirmed:
+- `regression_detected=True`, `regression_confidence=0.801`, `regression_match_method="semantic"` — the keyword matcher alone would have missed this entirely (0.00 Jaccard).
+- `_send_upload_alerts` → `notifications.send_alert()` returned `True`, and the message ("🔥 *Roast: fix didn't hold* — ...") was independently confirmed to land in the user's real Discord channel.
+
+Test data (the synthetic cluster and upload) was deleted and the real cluster's `resolved` status reverted afterward — nothing about this verification pass altered real data.
+
+### 16.6 Cross-platform fusion (section 15.6) — confirmed data-limited, not broken
+
+Surveyed all 926 clusters in the live database: the heuristic platform detector fires on only 6 (all Android, 0 iOS). Checked whether this was a regex bug by searching raw review *content* (not just cluster titles) directly: only 8 individual reviews across the whole dataset mention iOS/iPhone/iPad at all, versus 47 mentioning Android — a genuine skew in the underlying data, not a detection failure. The feature is confirmed working exactly as designed (best-effort, returns nothing rather than fabricating a match) — it just won't have much to find until the platform mix in the underlying reviews changes.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |

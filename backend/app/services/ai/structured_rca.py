@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 NVIDIA_API_URL = os.getenv("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1")
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct")
+# See llm_service.py for why this default changed -- the old one is EOL'd.
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
 
 
 class RootCauseHypothesis(BaseModel):

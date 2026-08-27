@@ -22,7 +22,17 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 NVIDIA_API_URL = os.getenv("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1")
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct")
+# meta/llama-3.1-8b-instruct reached end-of-life on NVIDIA's side on
+# 2026-08-26 and now 410s on every call. nemotron-3-super-120b-a12b is
+# verified (2026-08-27) to support both plain generation and Instructor
+# structured/tool-calling output on this account's catalog -- several other
+# candidates that answer fine (e.g. meta/llama-3.2-11b-vision-instruct)
+# return a non-OpenAI-compatible tool-call format Instructor can't parse, and
+# a "smaller/faster" alternative (nemotron-3.5-lightning-30b-a3b) was
+# measured SLOWER and less reliable in the full 5-step RCA agent pipeline
+# (64-118s per cluster, one outright truncation failure) than this one
+# (~15-45s per cluster once warm). See NEW_ARCHITECTURE_CHANGES.md.
+NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b")
 
 # Sentinel returned by generate() on total failure. Exposed as a constant so
 # callers can distinguish "the model actually said this" from "the call
