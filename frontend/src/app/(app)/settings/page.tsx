@@ -7,11 +7,12 @@
  */
 
 import { motion, AnimatePresence } from "framer-motion";
-import { User, Bell, Shield, Moon, Sun, Mail, Lock, Globe, Zap, ChevronRight, Webhook, Check, Loader2, ShieldCheck, ShieldOff, Copy, X, AlertCircle } from "lucide-react";
+import { User, Bell, Shield, Moon, Sun, Mail, Lock, Globe, Zap, ChevronRight, Webhook, Check, Loader2, ShieldCheck, ShieldOff, Copy, X, AlertCircle, Send } from "lucide-react";
 import { SpotlightCard } from "@/components/ui";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { apiClient } from "@/lib/api-client";
+import { isPushSupported, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from "@/lib/push";
 
 interface MfaFactor {
   id: string;
@@ -24,9 +25,16 @@ export default function SettingsPage() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [notifications, setNotifications] = useState({
     email: true,
-    push: false,
     weekly: true,
   });
+
+  // Push notifications -- real Web Push (self-hosted VAPID, see lib/push.ts),
+  // not a mock toggle. "subscribed" reflects THIS browser's actual service
+  // worker subscription state, checked on mount rather than assumed.
+  const [pushSupported, setPushSupported] = useState(true);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushStatus, setPushStatus] = useState<"idle" | "subscribing" | "unsubscribing" | "testing" | "error">("idle");
+  const [pushError, setPushError] = useState<string | null>(null);
 
   // Proactive alerting — Slack/Discord webhook, wired to the real backend
   // (see /settings/alerts). Not tied to the mock notification toggles above.
@@ -90,6 +98,11 @@ export default function SettingsPage() {
     };
     getUser();
     loadMfaFactors();
+
+    setPushSupported(isPushSupported());
+    if (isPushSupported()) {
+      getExistingSubscription().then((sub) => setPushSubscribed(!!sub));
+    }
 
     // Load theme from localStorage
     const savedTheme = localStorage.getItem('theme') as 'dark' | 'light' || 'dark';
@@ -270,6 +283,51 @@ export default function SettingsPage() {
     } catch (e: any) {
       setMfaStatus("error");
       setMfaError(e.message || "Failed to disable 2FA");
+    }
+  };
+
+  const enablePush = async () => {
+    setPushStatus("subscribing");
+    setPushError(null);
+    try {
+      await ensureFreshToken();
+      const sub = await subscribeToPush();
+      await apiClient.subscribePush(sub.toJSON() as any);
+      setPushSubscribed(true);
+      setPushStatus("idle");
+    } catch (e: any) {
+      setPushStatus("error");
+      setPushError(e.message || "Couldn't enable push notifications");
+    }
+  };
+
+  const disablePush = async () => {
+    setPushStatus("unsubscribing");
+    setPushError(null);
+    try {
+      const endpoint = await unsubscribeFromPush();
+      if (endpoint) {
+        await ensureFreshToken();
+        await apiClient.unsubscribePush(endpoint);
+      }
+      setPushSubscribed(false);
+      setPushStatus("idle");
+    } catch (e: any) {
+      setPushStatus("error");
+      setPushError(e.message || "Couldn't disable push notifications");
+    }
+  };
+
+  const testPush = async () => {
+    setPushStatus("testing");
+    setPushError(null);
+    try {
+      await ensureFreshToken();
+      await apiClient.testPush();
+      setPushStatus("idle");
+    } catch (e: any) {
+      setPushStatus("error");
+      setPushError(e.message || "Test push failed");
     }
   };
 
@@ -521,26 +579,53 @@ export default function SettingsPage() {
                 </button>
               </div>
 
-              <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10">
-                <div className="flex items-center gap-3">
-                  <Bell className="w-4 h-4 text-neutral-500" />
-                  <div>
-                    <p className="text-sm text-white">Push Notifications</p>
-                    <p className="text-xs text-neutral-500">Get browser alerts</p>
+              {/* Real Web Push -- self-hosted VAPID, no third-party service.
+                  Reflects THIS browser's actual subscription state rather
+                  than a mock preference. */}
+              <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Bell className="w-4 h-4 text-neutral-500" />
+                    <div>
+                      <p className="text-sm text-white">Push Notifications</p>
+                      <p className="text-xs text-neutral-500">
+                        {!pushSupported
+                          ? "Not supported in this browser"
+                          : pushSubscribed
+                          ? "Enabled on this browser"
+                          : "Get a browser alert on new critical issues or a fix that didn't hold"}
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <button
-                  onClick={() => setNotifications(prev => ({ ...prev, push: !prev.push }))}
-                  className={`w-12 h-6 rounded-full transition-colors ${
-                    notifications.push ? 'bg-orange-500' : 'bg-neutral-700'
-                  }`}
-                >
-                  <div
-                    className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                      notifications.push ? 'translate-x-6' : 'translate-x-0.5'
+                  <button
+                    onClick={() => (pushSubscribed ? disablePush() : enablePush())}
+                    disabled={!pushSupported || pushStatus === "subscribing" || pushStatus === "unsubscribing"}
+                    className={`w-12 h-6 rounded-full transition-colors disabled:opacity-40 ${
+                      pushSubscribed ? "bg-orange-500" : "bg-neutral-700"
                     }`}
-                  />
-                </button>
+                  >
+                    <div
+                      className={`w-5 h-5 bg-white rounded-full transition-transform flex items-center justify-center ${
+                        pushSubscribed ? "translate-x-6" : "translate-x-0.5"
+                      }`}
+                    >
+                      {(pushStatus === "subscribing" || pushStatus === "unsubscribing") && (
+                        <Loader2 className="w-3 h-3 animate-spin text-neutral-500" />
+                      )}
+                    </div>
+                  </button>
+                </div>
+                {pushError && <p className="text-xs text-red-400 mt-2">{pushError}</p>}
+                {pushSubscribed && (
+                  <button
+                    onClick={testPush}
+                    disabled={pushStatus === "testing"}
+                    className="mt-3 flex items-center gap-1.5 text-xs text-neutral-400 hover:text-neutral-200 disabled:opacity-50"
+                  >
+                    {pushStatus === "testing" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                    {pushStatus === "testing" ? "Sending…" : "Send test notification"}
+                  </button>
+                )}
               </div>
 
               <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10">

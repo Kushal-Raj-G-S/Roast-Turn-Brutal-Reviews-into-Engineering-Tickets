@@ -114,6 +114,30 @@ class SeverityExplanation(SQLModel, table=True):
     )
 
 
+class PushSubscription(SQLModel, table=True):
+    """
+    A browser's Web Push subscription (endpoint + encryption keys), one row
+    per browser/device a user has enabled push notifications on -- not one
+    per user, since the same account can have push enabled on more than one
+    browser. Written by POST /push/subscribe when the frontend registers a
+    service worker and calls PushManager.subscribe(); read by
+    notifications.send_push() to actually deliver a message.
+    """
+
+    __tablename__ = "push_subscriptions"
+    __table_args__ = {'extend_existing': True}
+
+    id: Optional[int] = Field(default=None, primary_key=True, sa_column_kwargs={"autoincrement": True})
+    user_id: UUID = Field(index=True)
+    endpoint: str = Field(unique=True)
+    p256dh: str
+    auth: str
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=func.now())
+    )
+
+
 class Review(SQLModel, table=True):
     """Individual review records (optional - not used in optimized bulk processor)."""
     

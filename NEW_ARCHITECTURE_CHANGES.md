@@ -779,6 +779,31 @@ Active Sessions and Privacy Settings (export/delete data) are still dead buttons
 
 ---
 
+## 29. Real browser push notifications (self-hosted VAPID, zero third-party service) (2026-08-28)
+
+**New:** `backend/app/services/notifications.py` (`send_push`), `frontend/public/sw.js`, `frontend/src/lib/push.ts`
+**Touched:** `backend/app/core/config.py`, `backend/app/models/bulk_models.py` (new `PushSubscription` table), `backend/app/api/bulk_routes.py` (`/push/*`), `backend/app/core/shadow_deployment.py`, `frontend/src/lib/api-client.ts`, `frontend/src/app/(app)/settings/page.tsx`
+
+The Settings "Push Notifications" toggle was pure local state -- flipping it did nothing beyond a visual switch. Replaced with real Web Push, using a self-generated VAPID keypair (via `py-vapid`) rather than Firebase/OneSignal/any third-party push service -- genuinely free, no account, no vendor lock-in, runs entirely against the browser's native Push API.
+
+### How it fits together
+- `PushSubscription` (new table) stores one row per browser/device (`endpoint`, `p256dh`, `auth`) -- a user can have push enabled on more than one browser, unlike the single webhook URL.
+- `frontend/public/sw.js` -- a minimal service worker, two jobs only: show a notification on `push`, focus-or-open the app on `notificationclick`. No caching, not a PWA shell.
+- `frontend/src/lib/push.ts` -- wraps `Notification.requestPermission()` + `PushManager.subscribe()`, converting the VAPID public key (base64url) into the `Uint8Array` the browser API actually wants.
+- Settings' toggle now reflects THIS browser's real subscription state (checked via `getExistingSubscription()` on mount) rather than an assumed default, subscribes/unsubscribes for real, and has a "Send test notification" button that round-trips through the real backend.
+- `_send_upload_alerts` (shadow_deployment.py) now fires push to every subscribed device for the same two events as the Discord/Slack alert (new CRITICAL cluster, fix didn't hold) -- both channels are independent and both gated on the same `alerts_enabled` flag; a user can have either, both, or neither configured.
+- A push subscription that returns 404/410 (browser unsubscribed, or the push service expired it) is deleted from the table on the next send attempt rather than retried forever.
+
+### A real bug found and fixed before this could ever work
+Generated the VAPID keypair with `py-vapid`, then stored the private key as base64-of-the-full-PEM-text in `.env` (a normal-looking, reasonable-looking encoding choice). Testing `send_push` directly failed immediately with `Could not deserialize key data ... ASN.1 parsing error` -- traced it to `pywebpush`'s own `Vapid.from_string()`, which does **not** accept a PEM string at all despite `webpush()` accepting a `vapid_private_key` argument that looks like it should: it only accepts either the raw 32-byte EC private scalar (base64url, no padding) or a headerless base64url-encoded DER blob. Fixed by extracting the raw private value from the already-generated key (`private_numbers().private_value`, 32 bytes, base64url) and storing that instead -- same keypair, same public key, no need to regenerate anything the frontend already has.
+
+### Verified
+- Confirmed the corrected key format works by round-tripping a full push send through the real crypto envelope against a syntactically valid (but non-subscribed) FCM endpoint: the request reached Google's actual push service and came back `410 Gone` -- proof the VAPID JWT signing, ECDH key agreement, and HTTP delivery are all genuinely correct, not just "didn't crash."
+- Confirmed the DB round trip (subscribe → appears in `push_subscriptions` → visible via a direct query → cleanly removable) independently of the browser flow.
+- **Known limitation, not a bug**: this session's browser-automation tool runs in a headless/CDP-controlled context that auto-denies the native `Notification.requestPermission()` prompt -- the same class of limitation as native OS file-picker dialogs being unreachable earlier in this project. The failure was caught and surfaced correctly by the app itself ("Notification permission was denied."), confirming the error-handling path works; the full user-facing round trip (click toggle → real permission prompt → real subscribe → real notification appears) needs to be confirmed in a real, non-automated browser.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -811,3 +836,4 @@ Active Sessions and Privacy Settings (export/delete data) are still dead buttons
 | Ticket triage view | Kanban only, no drag affordance, silent drop feedback, priority score invisible | Kanban (with hover handle + hint + toast) plus Roast Arena — a ranked leaderboard with a per-card score power-bar, rank-swap animation, and a dramatic "back in the arena" regression re-entry |
 | Change Password / 2FA | Both dead buttons, no `onClick` | Real Supabase Auth password change (re-verifies current password) + real TOTP 2FA enforced server-side in `proxy.ts` for every sign-in method |
 | Protected-route coverage | Only `/dashboard`, `/settings`, `/api/roast` gated server-side | All of `(app)` (`/analytics`, `/upload`, `/clusters`, `/ai-debug` too) gated server-side, closing a real client-only-redirect gap |
+| Push Notifications toggle | Local UI state, did nothing | Real Web Push (self-hosted VAPID) — subscribes the real browser, fires on the same events as Discord/Slack alerts |

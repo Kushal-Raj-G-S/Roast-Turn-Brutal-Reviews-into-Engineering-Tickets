@@ -35,6 +35,7 @@ ragas>=0.4.3                   # RAG evaluation — scores generated RCA for fai
 # ragas needs a langchain-community version that still ships the legacy
 # chat_models compat shims it imports; 0.4.2 dropped them, so pin to 0.4.1.
 langchain-community==0.4.1
+pywebpush>=2.4.0                # Web Push (browser push notifications) — self-generated VAPID keys, no third-party service
 
 # Utilities
 python-dotenv>=1.2.0

@@ -16,7 +16,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, Depends, Backgro
 from pydantic import BaseModel
 from sqlmodel import Session, select, func
 
-from app.models.bulk_models import Upload, Cluster
+from app.models.bulk_models import Upload, Cluster, PushSubscription
 from app.models.usage_models import get_monthly_usage, increment_upload_count
 from app.core.config import config
 from app.core.plans import get_limits, uploads_unlimited, reviews_unlimited
@@ -1133,3 +1133,107 @@ async def test_alert_webhook(user: Profile = Depends(get_current_user)):
     if not ok:
         raise HTTPException(status_code=502, detail="Webhook did not accept the test message — double-check the URL")
     return {"status": "sent"}
+
+
+# ---------------------------------------------------------------------------
+# Web Push (browser push notifications) -- self-generated VAPID keys, no
+# third-party push service. One row per browser/device in push_subscriptions;
+# a user can have push enabled on more than one browser at once.
+# ---------------------------------------------------------------------------
+
+class PushSubscriptionBody(BaseModel):
+    endpoint: str
+    keys: dict  # {"p256dh": ..., "auth": ...} -- the shape PushManager.subscribe() returns
+
+
+@router.post("/push/subscribe")
+async def subscribe_push(
+    body: PushSubscriptionBody,
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    if "p256dh" not in body.keys or "auth" not in body.keys:
+        raise HTTPException(status_code=400, detail="Malformed subscription -- missing p256dh/auth keys")
+
+    existing = session.exec(
+        select(PushSubscription).where(PushSubscription.endpoint == body.endpoint)
+    ).first()
+    if existing:
+        # Re-subscribing (e.g. the browser rotated the endpoint) -- update in
+        # place rather than erroring on the unique constraint.
+        existing.user_id = user.id
+        existing.p256dh = body.keys["p256dh"]
+        existing.auth = body.keys["auth"]
+        session.add(existing)
+    else:
+        session.add(PushSubscription(
+            user_id=user.id, endpoint=body.endpoint,
+            p256dh=body.keys["p256dh"], auth=body.keys["auth"],
+        ))
+    session.commit()
+    return {"status": "subscribed"}
+
+
+class PushUnsubscribeBody(BaseModel):
+    endpoint: str
+
+
+@router.post("/push/unsubscribe")
+async def unsubscribe_push(
+    body: PushUnsubscribeBody,
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    sub = session.exec(
+        select(PushSubscription).where(
+            PushSubscription.endpoint == body.endpoint,
+            PushSubscription.user_id == user.id,
+        )
+    ).first()
+    if sub:
+        session.delete(sub)
+        session.commit()
+    return {"status": "unsubscribed"}
+
+
+@router.get("/push/status")
+async def push_status(
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    """Whether THIS browser is subscribed isn't knowable server-side (the
+    endpoint lives in the browser's IndexedDB via the service worker
+    registration) -- this just reports whether the account has ANY
+    subscription at all, for a simple on/off read in Settings."""
+    count = len(session.exec(select(PushSubscription).where(PushSubscription.user_id == user.id)).all())
+    return {"subscribed_devices": count}
+
+
+@router.post("/push/test")
+async def test_push(
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    from app.services import notifications
+
+    subs = session.exec(select(PushSubscription).where(PushSubscription.user_id == user.id)).all()
+    if not subs:
+        raise HTTPException(status_code=400, detail="No push subscription on this account yet -- enable push notifications first")
+
+    sent = 0
+    for sub in subs:
+        ok, is_gone = notifications.send_push(
+            {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
+            "Roast test notification",
+            "If you can see this, browser push is wired up correctly.",
+            url=f"{config.FRONTEND_URL}/dashboard",
+        )
+        if ok:
+            sent += 1
+        elif is_gone:
+            session.delete(sub)
+    session.commit()
+
+    if sent == 0:
+        raise HTTPException(status_code=502, detail="Push failed to send to every subscribed device")
+    return {"status": "sent", "devices": sent}

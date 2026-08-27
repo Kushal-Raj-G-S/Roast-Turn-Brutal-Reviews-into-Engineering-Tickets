@@ -48,6 +48,16 @@ class Config:
     # link in outbound alerts (Discord/Slack) so "Upload #45" is actually
     # reachable instead of an opaque internal id.
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+    # Web Push (browser push notifications) -- self-generated VAPID keypair,
+    # no third-party push service, no cost. Stored as the raw 32-byte EC
+    # private scalar, base64url-encoded (pywebpush's Vapid.from_string()
+    # only accepts this raw form or a headerless base64url DER blob --
+    # NOT a normal PEM string, which it fails to parse despite looking
+    # like a reasonable thing to pass it).
+    VAPID_PRIVATE_KEY: Optional[str] = os.getenv("VAPID_PRIVATE_KEY")
+    VAPID_PUBLIC_KEY: Optional[str] = os.getenv("VAPID_PUBLIC_KEY")
+    VAPID_SUBJECT: str = os.getenv("VAPID_SUBJECT", "mailto:admin@roast.systems")
     
     # Negative keywords (reviews with these are NEVER noise)
     NEGATIVE_KEYWORDS = [

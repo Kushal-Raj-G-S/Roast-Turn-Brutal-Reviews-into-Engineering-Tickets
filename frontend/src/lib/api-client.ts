@@ -420,6 +420,50 @@ class APIClient {
     return response.json();
   }
 
+  // ── Browser push notifications (Web Push, self-hosted VAPID) ────────
+  async subscribePush(subscription: PushSubscriptionJSON): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseURL}/push/subscribe`, {
+      method: 'POST',
+      headers: this.getHeaders(true),
+      body: JSON.stringify(subscription),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Failed to save push subscription');
+    }
+    return response.json();
+  }
+
+  async unsubscribePush(endpoint: string): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseURL}/push/unsubscribe`, {
+      method: 'POST',
+      headers: this.getHeaders(true),
+      body: JSON.stringify({ endpoint }),
+    });
+    if (!response.ok) throw new Error('Failed to remove push subscription');
+    return response.json();
+  }
+
+  async getPushStatus(): Promise<{ subscribed_devices: number }> {
+    const response = await fetch(`${this.baseURL}/push/status`, {
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) throw new Error('Failed to load push status');
+    return response.json();
+  }
+
+  async testPush(): Promise<{ status: string; devices: number }> {
+    const response = await fetch(`${this.baseURL}/push/test`, {
+      method: 'POST',
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Test push failed');
+    }
+    return response.json();
+  }
+
   // ── Fix verification / triage / cross-platform ──────────────────────
   async getTriageQueue(uploadId: number): Promise<{ upload_id: number; clusters: any[] }> {
     const response = await fetch(`${this.baseURL}/uploads/${uploadId}/triage-queue`, {

@@ -1,5 +1,6 @@
 """
-Proactive alerting — a generic Slack/Discord webhook sender.
+Proactive alerting — a generic Slack/Discord webhook sender, plus browser
+Web Push (see send_push below).
 
 One `alert_webhook_url` field per user (profiles.alert_webhook_url); format is
 auto-detected from the URL at send time so users don't have to tell us which
@@ -11,10 +12,12 @@ Deliberately best-effort throughout: a failed or missing webhook must never
 block or fail the upload pipeline it's reporting on.
 """
 
+import json
 import logging
 from typing import Optional
 
 import httpx
+from pywebpush import webpush, WebPushException
 
 from app.core.config import config
 
@@ -120,3 +123,41 @@ def format_batch_alert(
             )
 
     return "\n".join(lines)
+
+
+def send_push(subscription: dict, title: str, body: str, url: Optional[str] = None) -> tuple[bool, bool]:
+    """
+    Deliver one Web Push notification to one browser subscription.
+    Synchronous (pywebpush has no async API) -- the alert paths that use
+    this already run in a background worker, not a request handler, so
+    blocking briefly here is fine.
+
+    `subscription` is the raw dict shape the browser's PushManager.subscribe()
+    returns: {"endpoint": ..., "keys": {"p256dh": ..., "auth": ...}}.
+
+    Returns (success, is_gone). `is_gone=True` means the push service
+    returned 404/410 -- the browser unsubscribed or the subscription expired
+    on its end, so the caller should delete the stored row rather than keep
+    retrying a dead endpoint forever. Never raises -- same best-effort
+    contract as send_alert, for the same reason: a dead push subscription
+    must never block the pipeline reporting on it.
+    """
+    if not config.VAPID_PRIVATE_KEY or not config.VAPID_PUBLIC_KEY:
+        return False, False
+
+    try:
+        webpush(
+            subscription_info=subscription,
+            data=json.dumps({"title": title, "body": body, "url": url}),
+            vapid_private_key=config.VAPID_PRIVATE_KEY,
+            vapid_claims={"sub": config.VAPID_SUBJECT},
+            timeout=_TIMEOUT,
+        )
+        return True, False
+    except WebPushException as e:
+        status = e.response.status_code if e.response is not None else None
+        logger.warning(f"Push send failed (non-fatal, status={status}): {e}")
+        return False, status in (404, 410)
+    except Exception as e:
+        logger.warning(f"Push send failed (non-fatal): {e}")
+        return False, False

@@ -175,10 +175,12 @@ def _detect_regressions(
 
 async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[Cluster]) -> None:
     """
-    Proactive alerting: post to the user's Slack/Discord webhook (if they've
-    set one) for the two events actually worth interrupting someone for --
-    a fix that didn't hold, and a brand-new CRITICAL cluster. Silently does
-    nothing if no webhook is configured or alerts are turned off.
+    Proactive alerting: notify the user for the two events actually worth
+    interrupting someone for -- a fix that didn't hold, and a brand-new
+    CRITICAL cluster. Two independent channels, both gated on
+    profile.alerts_enabled: a Slack/Discord webhook (if one is configured)
+    and browser Web Push (if any device has subscribed) -- a user can have
+    either, both, or neither, and each is silently skipped if not set up.
 
     Batched into ONE message per upload instead of one message per finding --
     an upload with 5 new critical clusters previously fired 5 separate
@@ -191,13 +193,13 @@ async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[C
         return
 
     from app.models.models_supabase import Profile
+    from app.models.bulk_models import PushSubscription
     from app.services import notifications
 
     profile = session.get(Profile, upload.user_id)
-    if not profile or not profile.alerts_enabled or not profile.alert_webhook_url:
+    if not profile or not profile.alerts_enabled:
         return
 
-    webhook_url = profile.alert_webhook_url
     critical_items = []
     regression_items = []
     for c in clusters:
@@ -210,16 +212,42 @@ async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[C
         return
 
     app_name = (upload.filename or f"Upload #{upload.id}").rsplit(".", 1)[0]
-    text = notifications.format_batch_alert(
-        app_name, upload.id, upload.total_reviews or 0, critical_items, regression_items
-    )
-    sent = await notifications.send_alert(webhook_url, text)
+    total = len(critical_items) + len(regression_items)
 
-    if sent:
-        logger.info(
-            f"📣 Sent 1 batched alert ({len(critical_items)} critical, "
-            f"{len(regression_items)} regression) for upload {upload.id}"
+    if profile.alert_webhook_url:
+        text = notifications.format_batch_alert(
+            app_name, upload.id, upload.total_reviews or 0, critical_items, regression_items
         )
+        if await notifications.send_alert(profile.alert_webhook_url, text):
+            logger.info(
+                f"📣 Sent 1 batched webhook alert ({len(critical_items)} critical, "
+                f"{len(regression_items)} regression) for upload {upload.id}"
+            )
+
+    push_subs = session.exec(
+        select(PushSubscription).where(PushSubscription.user_id == upload.user_id)
+    ).all()
+    if push_subs:
+        push_title = f"{total} issue{'s' if total != 1 else ''} in {app_name}"
+        push_body = (
+            regression_items[0][0] if regression_items and not critical_items
+            else critical_items[0][0] if critical_items
+            else "New findings ready to review"
+        )
+        push_url = notifications.upload_link(upload.id)
+        sent_push = 0
+        for sub in push_subs:
+            ok, is_gone = notifications.send_push(
+                {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
+                push_title, push_body, url=push_url,
+            )
+            if ok:
+                sent_push += 1
+            elif is_gone:
+                session.delete(sub)
+        if sent_push:
+            logger.info(f"📱 Sent push notification to {sent_push} device(s) for upload {upload.id}")
+        session.commit()
 
 
 # Global orchestrator instance (lazy initialization)
