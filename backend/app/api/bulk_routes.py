@@ -8,7 +8,7 @@ import logging
 import math
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -928,6 +928,78 @@ async def get_cluster_details(
         # Clean up session on error to prevent connection leaks
         session.rollback()
         raise HTTPException(status_code=503, detail="Database temporarily unavailable")
+
+
+# ---------------------------------------------------------------------------
+# Cluster status updates
+# ---------------------------------------------------------------------------
+# Was entirely missing until now -- KanbanBoard.tsx rendered fresh/fixing/
+# resolved columns but had no drag-persist logic or API calls at all, and no
+# backend endpoint existed to change a cluster's status. That's a genuine
+# blocker for the fix-verification loop (section 15.1/16.5): the whole
+# feature is premised on users marking clusters resolved, which was
+# previously only possible by editing the database directly.
+
+_VALID_CLUSTER_STATUSES = {"fresh_roast", "assigned", "in_progress", "resolved", "wont_fix"}
+
+
+class ClusterStatusUpdate(BaseModel):
+    status: str
+
+
+class ClusterStatusResponse(BaseModel):
+    id: int
+    status: str
+    resolved_at: Optional[str] = None
+
+
+@router.patch("/clusters/{cluster_id}/status", response_model=ClusterStatusResponse)
+async def update_cluster_status(
+    cluster_id: int,
+    body: ClusterStatusUpdate,
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    """
+    Move a cluster between fresh_roast / assigned / in_progress / resolved /
+    wont_fix. Setting resolved_at happens here, not client-side, so it's
+    always the server's clock -- the fix-verification loop's confidence and
+    "days since resolved" math both depend on this being trustworthy.
+    """
+    if body.status not in _VALID_CLUSTER_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status must be one of: {', '.join(sorted(_VALID_CLUSTER_STATUSES))}",
+        )
+
+    cluster = session.get(Cluster, cluster_id)
+    if not cluster:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    upload = session.get(Upload, cluster.upload_id)
+    if not upload or str(upload.user_id) != str(user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to update this cluster")
+
+    was_resolved = cluster.status == "resolved"
+    cluster.status = body.status
+    cluster.updated_at = datetime.now(timezone.utc)
+
+    if body.status == "resolved" and not was_resolved:
+        cluster.resolved_at = datetime.now(timezone.utc)
+    elif body.status != "resolved" and was_resolved:
+        # Reopened -- this cluster is no longer a valid "resolved" baseline
+        # for the regression detector to compare future uploads against.
+        cluster.resolved_at = None
+
+    session.add(cluster)
+    session.commit()
+    session.refresh(cluster)
+
+    return ClusterStatusResponse(
+        id=cluster.id,
+        status=cluster.status,
+        resolved_at=cluster.resolved_at.isoformat() if cluster.resolved_at else None,
+    )
 
 
 @router.get("/health/db", response_model=dict)

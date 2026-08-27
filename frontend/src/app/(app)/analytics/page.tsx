@@ -134,6 +134,31 @@ export default function AnalyticsPage() {
   const [loadingStubId, setLoadingStubId] = useState<number | null>(null);
   const [stubError, setStubError] = useState<Map<number, string>>(new Map());
 
+  // Mark resolved / reopen -- previously there was no way to do this
+  // anywhere in the product (no API, no UI), which meant the fix-
+  // verification loop had no real trigger a user could actually reach.
+  const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const toggleResolved = async (cluster: NonNullable<AnalyticsData['clusters']>[number]) => {
+    const nextStatus = cluster.status === 'resolved' ? 'fresh_roast' : 'resolved';
+    setResolvingId(cluster.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) apiClient.setToken(session.access_token);
+      await apiClient.updateClusterStatus(cluster.id, nextStatus);
+      setAnalytics((prev) => {
+        if (!prev?.clusters) return prev;
+        return {
+          ...prev,
+          clusters: prev.clusters.map((c) => (c.id === cluster.id ? { ...c, status: nextStatus } : c)),
+        };
+      });
+    } catch (err) {
+      console.error('Failed to update cluster status:', err);
+    } finally {
+      setResolvingId(null);
+    }
+  };
+
   // Fetch the fused triage ranking + best-effort cross-platform pairs for this
   // upload. Both are additive: if either fails the page renders exactly as it
   // did before, just without that extra signal.
@@ -1473,6 +1498,21 @@ export default function AnalyticsPage() {
                     </div>
                   </div>
                 </motion.button>
+
+                {/* Mark resolved / reopen -- the fix-verification loop's real trigger */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleResolved(cluster); }}
+                  disabled={resolvingId === cluster.id}
+                  className={`border-l ${s.border} px-3 flex items-center transition-colors disabled:opacity-50 ${
+                    cluster.status === 'resolved' ? 'text-emerald-400 hover:text-emerald-300' : 'text-neutral-600 hover:text-neutral-300'
+                  }`}
+                  title={cluster.status === 'resolved' ? 'Reopen this issue' : 'Mark as resolved'}
+                >
+                  {resolvingId === cluster.id
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-400" />
+                    : <CheckCircle2 className="w-3.5 h-3.5" />
+                  }
+                </button>
 
                 {/* Export to ticket â€” separate from the accordion toggle */}
                 <button

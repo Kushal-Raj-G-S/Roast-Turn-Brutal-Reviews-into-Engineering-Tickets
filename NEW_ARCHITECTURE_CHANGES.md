@@ -504,6 +504,23 @@ While visually verifying release bisect in the UI, a sample review rendered with
 
 ---
 
+## 18. Cluster status updates: a missing prerequisite for the fix-verification loop (2026-08-27)
+
+**New:** `PATCH /clusters/{id}/status` in `backend/app/api/bulk_routes.py`
+**Touched:** `frontend/src/lib/api-client.ts`, `frontend/src/app/(app)/analytics/page.tsx`
+
+Running the fix-verification loop's checklist item exactly as specified — "mark a cluster resolved in the Kanban board, upload a new CSV, confirm it gets flagged" — surfaced that step one was impossible. `KanbanBoard.tsx` renders fresh/fixing/resolved columns but has no drag-persist logic or API calls at all; `api-client.ts` had `'resolved'` only as a TypeScript union member, never an actual method; the backend had no endpoint to change a cluster's status at all. **There was no way to mark anything resolved anywhere in the product.** Every verification of the fix-verification loop up to this point (sections 15.1, 16.5) had only been possible by editing `status` directly in the database — which meant the flagship feature this session was built around had no real trigger a user could actually reach.
+
+### New
+`PATCH /clusters/{id}/status` — validates the target status against the five real values (`fresh_roast | assigned | in_progress | resolved | wont_fix`), enforces the same upload-ownership check as every other cluster-mutating endpoint, and sets `resolved_at`/clears it server-side (not client-supplied) so the regression detector's confidence and timing math stays trustworthy. Reopening a previously-resolved cluster clears `resolved_at`, since it's no longer a valid resolved baseline to compare future uploads against.
+
+Wired into the analytics page as a checkmark button next to the existing ticket-export button on every cluster row (`CheckCircle2`, turns emerald once resolved, click again to reopen) — the Kanban board itself is unchanged and still not wired to persist; this was the minimal real path to unblock the feature rather than a full Kanban rebuild.
+
+### Verified — the full checklist item, for real this time
+Rather than re-verify with another database shortcut, ran the exact real flow: clicked the new "Mark as resolved" button on a real cluster (`"[CRITICAL] App crashes"`, id 909) in the live analytics UI, confirmed `PATCH` returned 200 and the button turned emerald; built a small real CSV with paraphrased versions of the same bug ("Application locks up and closes itself...", "The app keeps freezing and shutting down...") and pushed it through the **real** `POST /upload` endpoint with a live session token extracted from the browser (not a synthetic pipeline call — the native OS file-picker dialog itself isn't reachable through this browser-automation surface, so a real authenticated multipart request was used in its place, which exercises the identical backend code path a real browser submission would); waited for the real background worker to finish (4.8s); confirmed both new clusters were flagged **automatically, with no manual `_detect_regressions` call this time** — `regression_detected=True`, confidence 0.713 and 0.63, method `semantic`, `regression_of_title="[CRITICAL] App crashes"`. Confirmed the "2 REGRESSIONS" summary badge and per-cluster "FIX DIDN'T HOLD 71%" / "63%" badges rendered live in the UI, and that hovering surfaced the full tooltip (`"The fix didn't hold. Previously resolved as: ... Match confidence: 71% ... Matched by meaning"`). Also sanity-checked that the pre-existing ticket-export flow was unaffected — the exported markdown correctly included `**⚠️ Regression of:** [CRITICAL] App crashes`. Test upload and cluster status reverted afterward.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |

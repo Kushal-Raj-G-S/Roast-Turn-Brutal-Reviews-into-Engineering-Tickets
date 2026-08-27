@@ -437,6 +437,23 @@ class APIClient {
     return response.json();
   }
 
+  // ── Cluster status (resolve / reopen / assign) ───────────────────────
+  async updateClusterStatus(
+    clusterId: number,
+    status: 'fresh_roast' | 'assigned' | 'in_progress' | 'resolved' | 'wont_fix'
+  ): Promise<{ id: number; status: string; resolved_at: string | null }> {
+    const response = await fetch(`${this.baseURL}/clusters/${clusterId}/status`, {
+      method: 'PATCH',
+      headers: this.getHeaders(true),
+      body: JSON.stringify({ status }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Failed to update cluster status');
+    }
+    return response.json();
+  }
+
   // ── Auto-generated repro test stub ───────────────────────────────────
   async generateTestStub(clusterId: number): Promise<{ cluster_id: number; code: string }> {
     const response = await fetch(`${this.baseURL}/clusters/${clusterId}/test-stub`, {
