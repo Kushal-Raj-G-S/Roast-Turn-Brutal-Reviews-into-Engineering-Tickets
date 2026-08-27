@@ -688,6 +688,35 @@ This same real upload's 5 CRITICAL clusters fired **5 separate Discord messages*
 
 ---
 
+## 26. Alerts batched into one message per upload, with an actual identity instead of a bare id (2026-08-27)
+
+**Touched:** `backend/app/services/notifications.py`, `backend/app/core/shadow_deployment.py`, `backend/app/core/config.py`
+
+§25's live test surfaced the multi-alert question with a real answer: 5 critical clusters in one upload fired 5 separate Discord messages. Raised it and got two decisions: batch them into one message, and fix the deeper problem the multi-message version was already hiding — "Upload #45" identifies nothing. Days later, in a channel with alerts from multiple apps, a bare upload id forces someone to go look it up before they even know what the alert is about.
+
+### New
+- `notifications.format_batch_alert(app_name, upload_id, review_count, critical_items, regression_items)` builds ONE message for everything worth alerting on from an upload: a header naming the app and review count, a real clickable link to that upload's analytics page, then an itemized list per finding (so nothing is lost by batching — each cluster/regression is still individually named).
+- New `config.FRONTEND_URL` (env var, defaults to `http://localhost:3000` for local dev) — the base URL used to build that link. Needs to be set to the real deployed frontend origin in production for the link to resolve for the user, not just locally.
+- `_send_upload_alerts` now collects all critical/regression clusters into two lists first, then sends exactly one `send_alert` call per upload instead of looping and sending one per cluster.
+- The link is a **bare URL**, not Slack's `<url|label>` link syntax — Discord doesn't understand that syntax and would render the pipe and label literally instead of a clean link. A plain URL auto-linkifies on both Slack and Discord, so this is the one form that works on either target without needing to know which service the user's webhook points at.
+
+### Verified
+- Composed the real batch message against the actual Snapchat upload (80) from §25's live test, with `send_alert` monkey-patched to capture the text instead of sending, to check the exact output before spending a real send:
+  ```
+  🔥 *Roast: 5 issues found in "Snapchat"* (10000 reviews analyzed)
+  Upload #80: http://localhost:3000/analytics?upload_id=80
+
+  *New critical clusters (5):*
+  • "[CRITICAL] App crashes" (1 review)
+  • "[CRITICAL] Issue: always block account create new account blocked cr..." (1 review)
+  ...
+  ```
+- App name correctly derived from the real filename (`Snapchat.csv` → `Snapchat`), not left as a raw upload id.
+- Sent that exact message for real to the user's actual configured Discord webhook (`send_alert` returned `True`) to confirm real-world rendering, not just the composed string.
+- Backend restarted (picked up `config.py`'s new env var), confirmed clean startup.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -716,3 +745,4 @@ This same real upload's 5 CRITICAL clusters fired **5 separate Discord messages*
 | Kanban columns / ordering | 3 visual columns (2 real statuses unreachable); cards in query order | All 5 real statuses as columns; cards ranked by the same fused priority score as `/triage-queue` |
 | Repro-stub malformed-output retry | Immediate retry, no backoff | 2s backoff before the retry, matching `_call_nvidia_api`'s pattern |
 | RAGAS Faithfulness/AnswerRelevancy budget | max_tokens=3000 (still truncated under real load) | max_tokens=8000, sized to the real observed worst case (6,298 tokens) |
+| Multi-finding alerts | One Discord/Slack message per critical cluster/regression | One batched message per upload, with app name + review count + a real clickable link |

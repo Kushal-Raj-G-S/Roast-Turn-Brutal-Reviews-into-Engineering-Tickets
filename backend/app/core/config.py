@@ -43,6 +43,11 @@ class Config:
     # File uploads
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./uploads")
     MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500"))
+
+    # Base URL of the deployed frontend -- used to build a real clickable
+    # link in outbound alerts (Discord/Slack) so "Upload #45" is actually
+    # reachable instead of an opaque internal id.
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
     
     # Negative keywords (reviews with these are NEVER noise)
     NEGATIVE_KEYWORDS = [

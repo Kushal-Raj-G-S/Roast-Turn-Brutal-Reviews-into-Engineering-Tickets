@@ -179,6 +179,13 @@ async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[C
     set one) for the two events actually worth interrupting someone for --
     a fix that didn't hold, and a brand-new CRITICAL cluster. Silently does
     nothing if no webhook is configured or alerts are turned off.
+
+    Batched into ONE message per upload instead of one message per finding --
+    an upload with 5 new critical clusters previously fired 5 separate
+    Discord pings back-to-back, which reads as spam and buries the one thing
+    that actually matters (which upload, which app). The batched message
+    leads with the app name, review count, and a real clickable link to the
+    upload -- "Upload #45" alone told a reader nothing days later.
     """
     if not clusters:
         return
@@ -191,21 +198,28 @@ async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[C
         return
 
     webhook_url = profile.alert_webhook_url
-    sent = 0
+    critical_items = []
+    regression_items = []
     for c in clusters:
         if c.regression_detected and c.regression_of_title:
-            text = notifications.format_regression_alert(
-                c.title, c.regression_of_title, c.regression_confidence or 0.5, upload.id
-            )
+            regression_items.append((c.title, c.regression_of_title, c.regression_confidence or 0.5))
         elif (c.severity or "").lower() == "critical":
-            text = notifications.format_critical_alert(c.title, c.review_count, upload.id)
-        else:
-            continue
-        if await notifications.send_alert(webhook_url, text):
-            sent += 1
+            critical_items.append((c.title, c.review_count))
+
+    if not critical_items and not regression_items:
+        return
+
+    app_name = (upload.filename or f"Upload #{upload.id}").rsplit(".", 1)[0]
+    text = notifications.format_batch_alert(
+        app_name, upload.id, upload.total_reviews or 0, critical_items, regression_items
+    )
+    sent = await notifications.send_alert(webhook_url, text)
 
     if sent:
-        logger.info(f"📣 Sent {sent} alert(s) for upload {upload.id}")
+        logger.info(
+            f"📣 Sent 1 batched alert ({len(critical_items)} critical, "
+            f"{len(regression_items)} regression) for upload {upload.id}"
+        )
 
 
 # Global orchestrator instance (lazy initialization)
