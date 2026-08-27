@@ -1,14 +1,20 @@
 "use client";
 
 /**
- * KanbanBoard - 3-Column Ticket Board
+ * KanbanBoard - 5-Column Ticket Board
  * ====================================
- * Columns: Fresh Roast (Red), Fixing (Orange), Resolved (Green)
+ * Columns: Fresh Roast (Red), Assigned (Purple), Fixing (Orange),
+ *          Resolved (Green), Won't Fix (Gray)
  * Features: Drag-n-drop ready, Framer Motion animations, ticket grouping
+ *
+ * Tickets arrive pre-sorted by the caller (fused priority score --
+ * severity + AI faithfulness + regression + volume, same formula as the
+ * backend's /triage-queue endpoint) -- this component just groups by
+ * status and renders in the order it's given, it doesn't re-sort.
  */
 
 import { motion, LayoutGroup } from "framer-motion";
-import { Flame, Wrench, CheckCircle2 } from "lucide-react";
+import { Flame, UserCheck, Wrench, CheckCircle2, XCircle } from "lucide-react";
 import { TicketCard } from "./TicketCard";
 import { cn } from "@/lib/utils";
 import { useRef, useEffect, useState } from "react";
@@ -23,13 +29,13 @@ export interface Ticket {
   app_version?: string;
   device_type?: string;
   review_count: number;
-  status: "fresh" | "fixing" | "resolved";
+  status: "fresh" | "assigned" | "fixing" | "resolved" | "wont_fix";
 }
 
 interface KanbanColumnProps {
   title: string;
   icon: React.ReactNode;
-  color: "red" | "orange" | "green";
+  color: "red" | "purple" | "orange" | "green" | "gray";
   tickets: Ticket[];
   className?: string;
   status: Ticket["status"];
@@ -56,6 +62,13 @@ function KanbanColumn({ title, icon, color, tickets, className, status, onDropTi
       glow: "shadow-red-500/20",
       count: "bg-red-500/20 text-red-400",
     },
+    purple: {
+      border: "border-purple-500/30",
+      bg: "bg-purple-500/5",
+      header: "from-purple-500 to-violet-700",
+      glow: "shadow-purple-500/20",
+      count: "bg-purple-500/20 text-purple-400",
+    },
     orange: {
       border: "border-orange-500/30",
       bg: "bg-orange-500/5",
@@ -69,6 +82,13 @@ function KanbanColumn({ title, icon, color, tickets, className, status, onDropTi
       header: "from-emerald-500 to-green-600",
       glow: "shadow-emerald-500/20",
       count: "bg-emerald-500/20 text-emerald-400",
+    },
+    gray: {
+      border: "border-neutral-500/30",
+      bg: "bg-neutral-500/5",
+      header: "from-neutral-600 to-neutral-800",
+      glow: "shadow-neutral-500/20",
+      count: "bg-neutral-500/20 text-neutral-400",
     },
   };
 
@@ -158,15 +178,18 @@ interface KanbanBoardProps {
 }
 
 export function KanbanBoard({ tickets, className, onStatusChange, movingId }: KanbanBoardProps) {
-  // Group tickets by status
+  // Group tickets by status -- order within each group is whatever the
+  // caller already sorted `tickets` into (see dashboard/page.tsx).
   const freshTickets = tickets.filter((t) => t.status === "fresh");
+  const assignedTickets = tickets.filter((t) => t.status === "assigned");
   const fixingTickets = tickets.filter((t) => t.status === "fixing");
   const resolvedTickets = tickets.filter((t) => t.status === "resolved");
+  const wontFixTickets = tickets.filter((t) => t.status === "wont_fix");
 
   return (
     <div
       className={cn(
-        "grid grid-cols-1 lg:grid-cols-3 gap-6 h-full",
+        "flex gap-6 h-full overflow-x-auto pb-2",
         className
       )}
     >
@@ -178,6 +201,17 @@ export function KanbanBoard({ tickets, className, onStatusChange, movingId }: Ka
         status="fresh"
         onDropTicket={onStatusChange}
         movingId={movingId}
+        className="min-w-[280px] flex-1"
+      />
+      <KanbanColumn
+        title="Assigned"
+        icon={<UserCheck className="w-5 h-5 text-white" />}
+        color="purple"
+        tickets={assignedTickets}
+        status="assigned"
+        onDropTicket={onStatusChange}
+        movingId={movingId}
+        className="min-w-[280px] flex-1"
       />
       <KanbanColumn
         title="Fixing"
@@ -187,6 +221,7 @@ export function KanbanBoard({ tickets, className, onStatusChange, movingId }: Ka
         status="fixing"
         onDropTicket={onStatusChange}
         movingId={movingId}
+        className="min-w-[280px] flex-1"
       />
       <KanbanColumn
         title="Resolved"
@@ -196,6 +231,17 @@ export function KanbanBoard({ tickets, className, onStatusChange, movingId }: Ka
         status="resolved"
         onDropTicket={onStatusChange}
         movingId={movingId}
+        className="min-w-[280px] flex-1"
+      />
+      <KanbanColumn
+        title="Won't Fix"
+        icon={<XCircle className="w-5 h-5 text-white" />}
+        color="gray"
+        tickets={wontFixTickets}
+        status="wont_fix"
+        onDropTicket={onStatusChange}
+        movingId={movingId}
+        className="min-w-[280px] flex-1"
       />
     </div>
   );

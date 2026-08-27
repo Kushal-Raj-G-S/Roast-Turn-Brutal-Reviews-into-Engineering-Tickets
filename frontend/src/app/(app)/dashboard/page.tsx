@@ -43,16 +43,36 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [movingTicketId, setMovingTicketId] = useState<string | null>(null);
 
-  // Drag-and-drop status changes -- KanbanBoard only knows the 3 visual
-  // columns ("fresh"/"fixing"/"resolved"); the backend has 5 real statuses
-  // (see PATCH /clusters/{id}/status), so this maps back the same way the
-  // reverse mapping above narrows 5 down to 3. Optimistic update first (the
-  // board should feel instant), then the real PATCH; revert on failure so
-  // the board never silently disagrees with the database.
-  const VISUAL_TO_BACKEND_STATUS: Record<Ticket["status"], "fresh_roast" | "in_progress" | "resolved"> = {
+  // Drag-and-drop status changes -- KanbanBoard's 5 visual columns now map
+  // 1:1 onto the backend's 5 real statuses (see PATCH /clusters/{id}/status).
+  // Optimistic update first (the board should feel instant), then the real
+  // PATCH; revert on failure so the board never silently disagrees with
+  // the database.
+  const VISUAL_TO_BACKEND_STATUS: Record<Ticket["status"], "fresh_roast" | "assigned" | "in_progress" | "resolved" | "wont_fix"> = {
     fresh: "fresh_roast",
+    assigned: "assigned",
     fixing: "in_progress",
     resolved: "resolved",
+    wont_fix: "wont_fix",
+  };
+
+  // Same fused score the backend's /triage-queue endpoint computes
+  // (severity + AI faithfulness + regression signal + log-scaled volume) --
+  // mirrored here so cards within a column are already ranked "fix this
+  // first" without an extra round-trip. Kept in sync with
+  // backend/app/api/bulk_routes.py's _priority_score.
+  const SEVERITY_WEIGHT: Record<string, number> = { critical: 100, high: 70, medium: 40, low: 15 };
+  const priorityScore = (cluster: any): number => {
+    const severityWeight = SEVERITY_WEIGHT[(cluster.severity || "").toLowerCase()] ?? 20;
+    const faithfulness =
+      typeof cluster.ai_metadata?.eval_scores?.faithfulness === "number"
+        ? cluster.ai_metadata.eval_scores.faithfulness
+        : 0.5;
+    const regressionBoost = cluster.regression_detected
+      ? 30 * (typeof cluster.regression_confidence === "number" ? cluster.regression_confidence : 0.5)
+      : 0;
+    const velocity = Math.log1p(Math.max(cluster.review_count || 0, 0)) * 5;
+    return severityWeight + faithfulness * 20 + regressionBoost + velocity;
   };
 
   const handleStatusChange = async (ticketId: string, newVisualStatus: Ticket["status"]) => {
@@ -149,21 +169,28 @@ export default function DashboardPage() {
         resolved_issues: resolvedCount,
       });
 
-      // Convert clusters to tickets for Kanban board
-      const clusterTickets: Ticket[] = allClusters.slice(0, 50).map((cluster: any) => ({
-        id: String(cluster.id),
-        title: cluster.title,
-        summary: cluster.rca_hypothesis || 'No description available',
-        severity: cluster.severity,
-        cluster_id: cluster.id,
-        app_version: "N/A",
-        device_type: "All",
-        review_count: cluster.review_count || 0,
-        status: cluster.status === 'fresh_roast' ? 'fresh' : 
-                cluster.status === 'in_progress' ? 'fixing' : 
-                cluster.status === 'resolved' ? 'resolved' : 'fresh',
-      }));
-      
+      // Convert clusters to tickets for Kanban board, ranked by the same
+      // fused priority score as the backend triage queue -- so within each
+      // column, the card most worth fixing first is already on top.
+      const clusterTickets: Ticket[] = [...allClusters]
+        .sort((a, b) => priorityScore(b) - priorityScore(a))
+        .slice(0, 50)
+        .map((cluster: any) => ({
+          id: String(cluster.id),
+          title: cluster.title,
+          summary: cluster.rca_hypothesis || 'No description available',
+          severity: cluster.severity,
+          cluster_id: cluster.id,
+          app_version: "N/A",
+          device_type: "All",
+          review_count: cluster.review_count || 0,
+          status: cluster.status === 'fresh_roast' ? 'fresh' :
+                  cluster.status === 'assigned' ? 'assigned' :
+                  cluster.status === 'in_progress' ? 'fixing' :
+                  cluster.status === 'resolved' ? 'resolved' :
+                  cluster.status === 'wont_fix' ? 'wont_fix' : 'fresh',
+        }));
+
       setTickets(clusterTickets);
       setLoading(false);
     } catch (error) {

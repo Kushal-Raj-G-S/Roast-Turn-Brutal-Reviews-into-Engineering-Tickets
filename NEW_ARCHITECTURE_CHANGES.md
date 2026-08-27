@@ -628,6 +628,22 @@ Reproduced the exact failure with a coordinate-accurate synthetic drag (confirme
 
 ---
 
+## 23. Kanban board: all 5 real statuses, and cards ranked by fused priority score (2026-08-27)
+
+**Touched:** `frontend/src/components/ui/KanbanBoard.tsx`, `frontend/src/app/(app)/dashboard/page.tsx`
+
+§22 made the Kanban board's 3 visual columns (fresh/fixing/resolved) persist for real, but that only covered 3 of the backend's 5 actual statuses — `assigned` and `wont_fix` had no way to be set from the board at all, and cards within a column were shown in whatever order Supabase happened to return them (most-recent-first), not by how urgent they actually were.
+
+### New
+- `Ticket["status"]` and `KanbanBoard` now cover all 5 real statuses: **Fresh Roast → Assigned → Fixing → Resolved → Won't Fix**, each a real drop target persisting via the same `PATCH /clusters/{id}/status` from §18/§22. The board is now a horizontally-scrolling 5-column row (`flex overflow-x-auto`, replacing the fixed 3-column grid) rather than compressing 5 states into 3 visual buckets.
+- Tickets are sorted client-side by the same fused priority score the backend's `/triage-queue` endpoint already computes (`severity weight + faithfulness×20 + regression_boost + log1p(review_count)×5` — mirrored in `dashboard/page.tsx`'s `priorityScore()`, kept in sync with `bulk_routes.py`'s `_priority_score`) before being grouped into columns, so the card most worth fixing is always on top within its column instead of whatever order the query returned.
+
+### Verified
+- Live reload showed all 5 columns rendering with the correct icons/colors, and the top Fresh Roast card was the CRITICAL "My whatsapp is not working" cluster — confirming the priority sort is live, not just type-checked.
+- Synthetic drag from Fresh Roast into **Assigned** (a status the board previously had no way to reach): `PATCH /clusters/407/status` returned `{"status":"assigned"}`. Dragged back to Fresh Roast to confirm the reverse direction: `{"status":"fresh_roast"}`. Test cluster restored to its original state afterward.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -653,3 +669,4 @@ Reproduced the exact failure with a coordinate-accurate synthetic drag (confirme
 | Release correlation | `affected_versions` column existed but was never populated | Derived on read from per-review versions (10/51 real uploads have the data) |
 | Cross-platform | Android/iOS versions of one bug triaged as two unrelated issues | Best-effort "same bug on both platforms?" candidate flagging |
 | Kanban board | Rendered columns only — no drag persistence, no API calls | Real drag-and-drop, persists via `PATCH /clusters/{id}/status`, optimistic update with revert-on-failure |
+| Kanban columns / ordering | 3 visual columns (2 real statuses unreachable); cards in query order | All 5 real statuses as columns; cards ranked by the same fused priority score as `/triage-queue` |
