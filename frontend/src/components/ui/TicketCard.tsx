@@ -28,6 +28,8 @@ export interface TicketCardProps {
   summary?: string;
   onClick?: () => void;
   className?: string;
+  /** Enables native HTML5 drag-and-drop -- the id is what KanbanColumn reads on drop. */
+  draggable?: boolean;
 }
 
 // ============================================================================
@@ -75,6 +77,7 @@ export function TicketCard({
   summary,
   onClick,
   className,
+  draggable,
 }: TicketCardProps) {
   const config = severityConfig[severity];
 
@@ -84,10 +87,16 @@ export function TicketCard({
         "group cursor-pointer rounded-xl border-l-4 bg-black/30 backdrop-blur-xl",
         "border border-white/5 hover:border-white/10 transition-all duration-200",
         "hover:bg-black/40",
+        draggable && "active:cursor-grabbing active:opacity-60",
         config.color,
         className
       )}
       onClick={onClick}
+      draggable={draggable}
+      onDragStart={draggable ? (e) => {
+        e.dataTransfer.setData("text/plain", id);
+        e.dataTransfer.effectAllowed = "move";
+      } : undefined}
     >
       <div className="p-4 space-y-3">
         {/* Header: Severity + Metadata */}

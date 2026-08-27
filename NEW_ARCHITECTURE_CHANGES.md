@@ -605,6 +605,29 @@ Re-running a reliability sweep to confirm 21.1 turned up a fourth thing: cluster
 
 ---
 
+## 22. Kanban board: real drag-and-drop persistence, and the type-mismatch bug that silently ate every drop (2026-08-27)
+
+**Touched:** `frontend/src/components/ui/TicketCard.tsx`, `frontend/src/components/ui/KanbanBoard.tsx`, `frontend/src/app/(app)/dashboard/page.tsx`
+
+§18 built the first real path to change a cluster's status (the checkmark button on the analytics page), but explicitly left the Kanban board itself unchanged — `KanbanBoard.tsx` rendered three columns with no drag-persist logic or API calls at all, a known, flagged limitation. This closes that gap: dragging a card between columns now actually calls the same `PATCH /clusters/{id}/status` endpoint from §18 and persists.
+
+### New
+- `TicketCard` takes a `draggable` prop; when set, the card is a real HTML5 drag source (`draggable`, `onDragStart` writing its id into `dataTransfer`).
+- `KanbanColumn` becomes a real drop target when the board is given an `onStatusChange` handler: `onDragOver`/`onDrop` with a visual "drop here" state, and cards mid-save are dimmed (`opacity-40 pointer-events-none`) via a `movingId` prop so a second drag can't race the first.
+- `dashboard/page.tsx`'s `handleStatusChange` does an optimistic move (updates local state immediately, before the network call), calls the real `PATCH` via `apiClient.updateClusterStatus`, and reverts the local state if the call fails — so the board never silently disagrees with the database on a failed save.
+
+### A real bug found during live verification, not by the type-checker
+First live drag test: the browser's own `left_click_drag` mouse simulation landed imprecisely (its target coordinates fell inside the *Fixing* column, not *Resolved*, once the actual rendered column boundaries were measured), which looked like nothing happened. Re-testing with a coordinate-accurate synthetic DOM drag (`dispatchEvent` of real `dragstart`/`dragover`/`drop` `DragEvent`s against the actual card and column elements) still produced **zero network calls** — a real bug, not a test-tooling artifact.
+
+Root cause, found by walking the React fiber tree to inspect the actual prop values in memory: `Ticket.id` is typed as `string` in `KanbanBoard.tsx`, but the real data source (`cluster.id` from Supabase) is a **number**. `dataTransfer.setData()` coerces it to the string `"1165"` on the way out; `handleStatusChange`'s `tickets.find(t => t.id === ticketId)` then compares `1165 === "1165"` — always `false` under strict equality — so the handler's early-return guard (`if (!ticket) return`) silently swallowed every single drop before it ever reached the API call. No error, no console warning, no visual sign anything had gone wrong; the card would just not move.
+
+Fixed at the source rather than patching the comparison: `dashboard/page.tsx` now maps `id: String(cluster.id)` when building tickets, so the id is a string everywhere downstream, matching what `dataTransfer` was always going to hand back on drop.
+
+### Verified
+Reproduced the exact failure with a coordinate-accurate synthetic drag (confirmed via React fiber inspection that `ticket.id` was `1165` as a `number`, not a string, before the fix — and confirmed zero `fetch`/PATCH calls fired on drop). After the fix, re-ran the identical synthetic drag against the same cluster (1165, `"too much bugs..."`, real production data) from Resolved → Fresh Roast: `PATCH /clusters/1165/status` fired and returned `{"id":1165,"status":"fresh_roast","resolved_at":null}`, the board's Fresh Roast/Resolved counts updated live (49→50, 1→0) with no page reload, matching the optimistic-then-confirmed update path. Dragged it back afterward to restore the original resolved state; confirmed via a second successful `PATCH` returning `status: "resolved"`.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -629,3 +652,4 @@ Re-running a reliability sweep to confirm 21.1 turned up a fourth thing: cluster
 | Repro steps | Terminal prose in the RCA | On-demand runnable Playwright test stub |
 | Release correlation | `affected_versions` column existed but was never populated | Derived on read from per-review versions (10/51 real uploads have the data) |
 | Cross-platform | Android/iOS versions of one bug triaged as two unrelated issues | Best-effort "same bug on both platforms?" candidate flagging |
+| Kanban board | Rendered columns only — no drag persistence, no API calls | Real drag-and-drop, persists via `PATCH /clusters/{id}/status`, optimistic update with revert-on-failure |

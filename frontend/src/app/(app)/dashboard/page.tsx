@@ -14,6 +14,7 @@ import { UsageDashboard } from "@/components/dashboard/UsageDashboard";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
+import { apiClient } from "@/lib/api-client";
 
 interface UserProfile {
   id: string;
@@ -40,6 +41,40 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
+  const [movingTicketId, setMovingTicketId] = useState<string | null>(null);
+
+  // Drag-and-drop status changes -- KanbanBoard only knows the 3 visual
+  // columns ("fresh"/"fixing"/"resolved"); the backend has 5 real statuses
+  // (see PATCH /clusters/{id}/status), so this maps back the same way the
+  // reverse mapping above narrows 5 down to 3. Optimistic update first (the
+  // board should feel instant), then the real PATCH; revert on failure so
+  // the board never silently disagrees with the database.
+  const VISUAL_TO_BACKEND_STATUS: Record<Ticket["status"], "fresh_roast" | "in_progress" | "resolved"> = {
+    fresh: "fresh_roast",
+    fixing: "in_progress",
+    resolved: "resolved",
+  };
+
+  const handleStatusChange = async (ticketId: string, newVisualStatus: Ticket["status"]) => {
+    const ticket = tickets.find((t) => t.id === ticketId);
+    if (!ticket || ticket.status === newVisualStatus) return;
+
+    const previousStatus = ticket.status;
+    setMovingTicketId(ticketId);
+    setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: newVisualStatus } : t)));
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) apiClient.setToken(session.access_token);
+      await apiClient.updateClusterStatus(Number(ticketId), VISUAL_TO_BACKEND_STATUS[newVisualStatus]);
+    } catch (err) {
+      console.error("Failed to update cluster status:", err);
+      // Revert -- the drag looked like it worked but the database rejected it.
+      setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: previousStatus } : t)));
+    } finally {
+      setMovingTicketId(null);
+    }
+  };
 
   useEffect(() => {
     checkUser();
@@ -116,7 +151,7 @@ export default function DashboardPage() {
 
       // Convert clusters to tickets for Kanban board
       const clusterTickets: Ticket[] = allClusters.slice(0, 50).map((cluster: any) => ({
-        id: cluster.id,
+        id: String(cluster.id),
         title: cluster.title,
         summary: cluster.rca_hypothesis || 'No description available',
         severity: cluster.severity,
@@ -266,7 +301,7 @@ export default function DashboardPage() {
             </button>
           )}
         </div>
-        <KanbanBoard tickets={tickets} />
+        <KanbanBoard tickets={tickets} onStatusChange={handleStatusChange} movingId={movingTicketId} />
       </motion.div>
     </div>
   );
