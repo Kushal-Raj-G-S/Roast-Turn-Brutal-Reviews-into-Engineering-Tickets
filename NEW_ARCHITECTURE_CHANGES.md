@@ -660,6 +660,34 @@ Restarted the backend to load the change, confirmed clean startup (`GET /docs` �
 
 ---
 
+## 25. RAGAS Faithfulness/AnswerRelevancy still truncating at max_tokens=3000 under a real upload — needed 8000, not one more bump (2026-08-27)
+
+**Touched:** `backend/app/services/ai/evaluation.py`
+
+Prompted by a real upload (`Snapchat.csv`, upload 80/81, 10,001 reviews) pushed through the full pipeline live to confirm §19's RAGAS/token-budget fixes hold under real background load. Watched the run through the base pipeline (20 clusters, no truncation, 5 Discord alerts fired correctly for 5 CRITICAL clusters — see the note on that below), then the RCA agent + RAGAS enrichment phase for the top 5 CRITICAL/HIGH clusters. 4/5 clusters got real Faithfulness/AnswerRelevancy scores. Cluster 1204 logged the exact `max_tokens length limit` warning §19 was supposed to have already fixed.
+
+### This was not the same bug reappearing — it needed real headroom, not a retry
+Reproduced deterministically outside the running pipeline (re-ran `evaluate_rca()` directly against cluster 1204's actual stored hypothesis and reviews). Confirmed genuinely reproducible, then instrumented the raw `AsyncCompletions.create` call to log `finish_reason`/`completion_tokens` per call before guessing at a fix:
+
+- At `max_tokens=3000` (§19's fix): truncated, as logged.
+- At `max_tokens=4096` (first attempt at this fix): **still truncated** — `finish_reason=length`, `completion_tokens=4096`, `content_len=17014` (17KB of reasoning, zero structured output reached). Bumping by ~35% did nothing; this wasn't a "just needed a little more" case.
+- At `max_tokens=8000` (diagnostic, not yet the committed fix): **all 5 internal calls succeeded** — `finish_reason=tool_calls`/`stop` on every one. The heaviest call (RAGAS's own internal claim-decomposition step, which Faithfulness runs as a separate structured LLM call before verifying each claim — not something `evaluate_rca()`'s own code controls) actually consumed **6,298 completion tokens**. The others needed far less (303-326). This explains why 3000 and 4096 both failed: the real ceiling for this model's worst-case claim-decomposition output is close to 2x what was budgeted.
+
+Settled on `max_tokens=8000`. Re-verified cleanly against the same cluster afterward: `{"faithfulness": 0.667, "answer_relevancy": 0.389, "reasoning": "..."}` — a real, non-None result.
+
+### A related but separate, smaller issue noticed in the same reasoning output, not fixed here
+`_generate_score_reasoning`'s own `max_tokens=350` (a difference budget, for a *different* one-shot call — the "why did it score this way" explanation) cut off mid-sentence in this same verification ("...Answer relevancy" with no continuation). This is the same class of issue as the main fix but on a separate, smaller call site; left as-is for now since it doesn't return `None`/block anything (the truncated-but-coherent text is still stored, matching the exact tradeoff §16.3 already documented as acceptable for this call), flagged here rather than silently left out of the record.
+
+### A live answer to the "multiple simultaneous alerts" open question from earlier
+This same real upload's 5 CRITICAL clusters fired **5 separate Discord messages** (confirmed via live backend logs: 5 individual `POST .../webhooks/... → 204 No Content` calls, then `📣 Sent 5 alert(s) for upload 80`) — not batched into one. This was previously an untested, open UX question; now it's an observed fact about current behavior, not yet a decision about whether it's the desired behavior.
+
+### Verified
+- Full real upload (10,001 reviews) processed end-to-end with zero truncation after the fix: base pipeline (20 clusters), 5 real Discord alerts, 4-category severity pregeneration, and full RCA-agent + RAGAS enrichment for the top 5 clusters — all clean.
+- The specific cluster that failed before the fix (1204) now returns a real score when re-run.
+- Backend restarted (picked up the code change via `--reload`), confirmed clean startup with no import errors.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -687,3 +715,4 @@ Restarted the backend to load the change, confirmed clean startup (`GET /docs` �
 | Kanban board | Rendered columns only — no drag persistence, no API calls | Real drag-and-drop, persists via `PATCH /clusters/{id}/status`, optimistic update with revert-on-failure |
 | Kanban columns / ordering | 3 visual columns (2 real statuses unreachable); cards in query order | All 5 real statuses as columns; cards ranked by the same fused priority score as `/triage-queue` |
 | Repro-stub malformed-output retry | Immediate retry, no backoff | 2s backoff before the retry, matching `_call_nvidia_api`'s pattern |
+| RAGAS Faithfulness/AnswerRelevancy budget | max_tokens=3000 (still truncated under real load) | max_tokens=8000, sized to the real observed worst case (6,298 tokens) |

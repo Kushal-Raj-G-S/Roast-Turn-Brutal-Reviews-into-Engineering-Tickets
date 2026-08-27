@@ -47,11 +47,21 @@ def _get_metrics():
         # issue as repro_stub_generator.py). Silently truncated every
         # Faithfulness/AnswerRelevancy call under real load -- see
         # NEW_ARCHITECTURE_CHANGES.md for the log evidence.
+        #
+        # 3000 (the first fix) still wasn't always enough: Faithfulness
+        # doesn't just score in one call, it internally decomposes the
+        # hypothesis into individual claims via its OWN structured LLM call
+        # first, then verifies each one -- the claim-decomposition call has
+        # to fit the same reasoning overhead as everything else PLUS a list
+        # of claims sized to the hypothesis length, and 3000 still truncated
+        # under real load on a real upload (confirmed via a real background
+        # RCA run, then reproduced deterministically outside the pipeline
+        # against the exact cluster that failed). Raised further.
         ragas_llm = InstructorLLM(
             client=instructor_client,
             model=NVIDIA_MODEL,
             provider="openai",
-            model_args=InstructorModelArgs(max_tokens=3000),
+            model_args=InstructorModelArgs(max_tokens=8000),
         )
         ragas_embeddings = HuggingFaceEmbeddings(
             model="sentence-transformers/all-MiniLM-L6-v2", device="cpu"
