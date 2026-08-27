@@ -521,6 +521,46 @@ Rather than re-verify with another database shortcut, ran the exact real flow: c
 
 ---
 
+## 19. Diagnosing a real "test-stub took 64s and failed" report — nested retries and undersized token budgets across the whole AI layer (2026-08-27)
+
+**Touched:** `backend/app/services/llm_service.py`, `backend/app/services/ai/structured_rca.py`, `backend/app/services/ai/evaluation.py`
+
+The user reported the repro-test-stub generator "taking too long and failing," and asked to switch to `openai/gpt-oss-20b` (assuming it would be faster). Rather than switch on assumption, benchmarked it directly first.
+
+### The candidate model, benchmarked rather than assumed
+`openai/gpt-oss-20b` **is not faster**: 25.7s at a realistic 1400-token budget (comparable to the current model), and **73.6s** at 3000 tokens -- larger budgets make it slower, not more complete, because it burns 2,300-2,700 tokens per call on hidden reasoning regardless of how much room is available. It does put that reasoning in its own `reasoning_content` API field rather than mixing it into `content` (architecturally cleaner than the current model), but on raw speed it would have made the user's actual complaint worse. Confirmed with the user before proceeding, then investigated what actually happened instead of guessing.
+
+### What actually happened, from the real backend logs
+The user had uploaded a real 10,001-review CSV moments earlier. That triggered background RCA generation across 5+ clusters -- dozens of sequential NVIDIA calls in under a minute, during which NVIDIA's own API started returning `503 Service Unavailable`. The "Generate test" click landed right in the middle of that burst and queued behind it. The actual failure trace:
+
+```
+10:54:57  Retrying request to /chat/completions in 0.41s   <- OpenAI SDK's own internal retry
+10:55:12  Retrying request to /chat/completions in 0.90s   <- (nested inside ours)
+10:55:28  Retry 1/2 after 1s: Request timed out.           <- our own retry loop
+10:55:30  HTTP 503 Service Unavailable
+10:55:45  Retrying request to /chat/completions in 0.83s
+10:56:01  generate() NVIDIA call failed: Request timed out. <- gave up after 64s
+```
+
+Two independent retry layers were stacking: `AsyncOpenAI`'s client-level retries (SDK default: 2) nested inside `_call_nvidia_api`'s own 2-attempt loop, each with a 15s timeout. Fixed by passing `max_retries=0` to the `AsyncOpenAI` client -- we already retry with backoff at our own layer; retrying at both layers only multiplies worst-case latency (up to ~64s observed) without adding real resilience, and makes failures far less predictable.
+
+### The same log window also showed the RCA pipeline's own truncation bug, not yet fixed
+```
+RAGAS evaluation failed (non-fatal): The output is incomplete due to a max_tokens length limit.   (x4)
+Structured finalize failed (... max_tokens length limit) -- using draft hypothesis as fallback
+```
+The exact same class of bug already fixed for `repro_stub_generator.py` (§16.3) -- the reasoning model spends a real token budget on hidden chain-of-thought before the actual structured output -- was still present in two call sites that were never touched during that earlier fix:
+- `structured_rca.py`'s `generate_structured_rca`: `max_tokens=1800` (sized for the old 8B instruct model) → raised to `3000`.
+- `evaluation.py`'s RAGAS `InstructorLLM`: was using **Instructor's own default of `max_tokens=1024`**, never explicitly configured at all → set via `model_args=InstructorModelArgs(max_tokens=3000)`.
+- `evaluation.py`'s `_generate_score_reasoning`: `max_tokens=120` didn't truncate outright but cut an on-topic explanation off mid-sentence → raised to `350`.
+
+### Verified
+- `evaluate_rca()` re-run end to end: real Faithfulness/AnswerRelevancy scores returned with no truncation warning (previously failed on this exact class of call), and the reasoning explanation now ends on a complete sentence.
+- `generate_structured_rca()` re-run directly: succeeded with a full 4-step reproduction list, no fallback-to-draft.
+- A normal `llm.generate()` call still succeeds after the `max_retries=0` client change (confirms the fix didn't silently break the happy path) -- and, run at a deliberately tiny `max_tokens=20` as a sanity probe, reproduced the general form of the reasoning-leak issue completely independent of any single call site: the returned `content` was hidden-reasoning prose ("Okay, the user is asking me to say the word...") rather than the requested one-word answer, confirming this is a property of the configured model under tight budgets generally, not a bug specific to any one prompt.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |

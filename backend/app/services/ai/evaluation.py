@@ -32,6 +32,7 @@ def _get_metrics():
         import instructor
         from openai import AsyncOpenAI
         from ragas.llms import InstructorLLM
+        from ragas.llms.base import InstructorModelArgs
         from ragas.embeddings import HuggingFaceEmbeddings
         from ragas.metrics.collections import Faithfulness, AnswerRelevancy
 
@@ -39,7 +40,19 @@ def _get_metrics():
         raw_client = AsyncOpenAI(base_url=NVIDIA_API_URL, api_key=api_key)
         instructor_client = instructor.from_openai(raw_client, mode=instructor.Mode.TOOLS)
 
-        ragas_llm = InstructorLLM(client=instructor_client, model=NVIDIA_MODEL, provider="openai")
+        # InstructorModelArgs defaults to max_tokens=1024 -- fine for a plain
+        # instruct model, not enough for the configured reasoning model
+        # (nemotron-3-super-120b-a12b spends 1000-2500+ tokens on hidden
+        # chain-of-thought before ever emitting the structured score, same
+        # issue as repro_stub_generator.py). Silently truncated every
+        # Faithfulness/AnswerRelevancy call under real load -- see
+        # NEW_ARCHITECTURE_CHANGES.md for the log evidence.
+        ragas_llm = InstructorLLM(
+            client=instructor_client,
+            model=NVIDIA_MODEL,
+            provider="openai",
+            model_args=InstructorModelArgs(max_tokens=3000),
+        )
         ragas_embeddings = HuggingFaceEmbeddings(
             model="sentence-transformers/all-MiniLM-L6-v2", device="cpu"
         )
@@ -82,7 +95,11 @@ Review evidence:
 {evidence}"""
 
         llm = get_llm_service()
-        reasoning = await llm.generate(prompt, max_tokens=120)
+        # 120 was tuned for the original instruct model; verified this cuts
+        # the reasoning model's answer off mid-sentence (still on-topic and
+        # coherent, just incomplete). 350 leaves headroom for a genuinely
+        # short 1-2 sentence explanation to finish.
+        reasoning = await llm.generate(prompt, max_tokens=350)
         if reasoning == FALLBACK_MESSAGE:
             # generate() never raises on failure -- it returns this sentinel
             # instead. Without this check it gets stored and shown to the

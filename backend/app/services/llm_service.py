@@ -113,7 +113,16 @@ class LLMService:
         # fast) could block for the SDK's own default (10 minutes), not 15s.
         # Discovered while testing the debug-center playground against
         # several bad model ids: one hung the test script for minutes.
-        self.client = AsyncOpenAI(base_url=self.api_url, api_key=self.api_key, timeout=self.timeout)
+        #
+        # max_retries=0: the SDK client retries internally by default (its
+        # own default is 2), which nests INSIDE _call_nvidia_api's own
+        # 2-attempt retry loop below -- under real load (NVIDIA returning
+        # 503s during a heavy background RCA batch) the two retry layers
+        # stacked to 64s before a single test-stub click finally failed,
+        # instead of failing in a predictable ~30s. We already retry at our
+        # own layer with backoff; retrying at both layers only multiplies
+        # worst-case latency without adding real resilience.
+        self.client = AsyncOpenAI(base_url=self.api_url, api_key=self.api_key, timeout=self.timeout, max_retries=0)
 
         # NVIDIA's free-tier account limit is 40 requests/min (confirmed by
         # the client) -- 35 leaves headroom so we self-throttle BEFORE

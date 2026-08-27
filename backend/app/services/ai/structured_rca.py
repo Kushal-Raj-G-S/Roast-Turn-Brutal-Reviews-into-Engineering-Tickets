@@ -79,7 +79,14 @@ async def generate_structured_rca(prompt: str, max_retries: int = 2) -> Structur
         response_model=StructuredRCA,
         max_retries=max_retries,
         temperature=0.2,
-        max_tokens=1800,
+        # 1800 was fine for the original 8B instruct model; the current
+        # reasoning model (nemotron-3-super-120b-a12b) spends a real chunk
+        # of the budget on hidden chain-of-thought before the structured
+        # output, and was observed truncating under real load ("Structured
+        # finalize failed... using draft hypothesis as fallback" -- see
+        # NEW_ARCHITECTURE_CHANGES.md). Matches the budget repro_stub_
+        # generator.py needed for the same reason.
+        max_tokens=3000,
         messages=[
             {
                 "role": "system",
