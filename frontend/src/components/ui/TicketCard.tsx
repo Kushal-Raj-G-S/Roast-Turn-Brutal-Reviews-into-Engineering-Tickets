@@ -8,7 +8,7 @@
  */
 
 import { motion } from "framer-motion";
-import { Flame, Tag, Smartphone, AlertTriangle } from "lucide-react";
+import { Flame, Tag, Smartphone, AlertTriangle, GripVertical } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TextReveal } from "./TextReveal";
 
@@ -84,10 +84,10 @@ export function TicketCard({
   return (
     <div
       className={cn(
-        "group cursor-pointer rounded-xl border-l-4 bg-black/30 backdrop-blur-xl",
+        "group relative cursor-pointer rounded-xl border-l-4 bg-black/30 backdrop-blur-xl",
         "border border-white/5 hover:border-white/10 transition-all duration-200",
         "hover:bg-black/40",
-        draggable && "active:cursor-grabbing active:opacity-60",
+        draggable && "cursor-grab active:cursor-grabbing active:opacity-60 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/40",
         config.color,
         className
       )}
@@ -98,9 +98,20 @@ export function TicketCard({
         e.dataTransfer.effectAllowed = "move";
       } : undefined}
     >
+      {/* Drag handle -- invisible until hovered, so a first-time user
+          discovers "this can be dragged" without permanent visual clutter. */}
+      {draggable && (
+        <div
+          className="absolute right-2 top-2 opacity-0 group-hover:opacity-50 transition-opacity duration-150 pointer-events-none"
+          aria-hidden="true"
+        >
+          <GripVertical className="w-4 h-4 text-neutral-400" />
+        </div>
+      )}
+
       <div className="p-4 space-y-3">
         {/* Header: Severity + Metadata */}
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap pr-5">
           <span
             className={cn(
               "px-2 py-0.5 text-xs font-bold rounded",
@@ -110,14 +121,14 @@ export function TicketCard({
           >
             {config.label}
           </span>
-          
+
           {version && (
             <span className="flex items-center gap-1 text-xs text-neutral-500">
               <Tag className="w-3 h-3" />
               {version}
             </span>
           )}
-          
+
           {device && (
             <span className="flex items-center gap-1 text-xs text-neutral-500">
               <Smartphone className="w-3 h-3" />

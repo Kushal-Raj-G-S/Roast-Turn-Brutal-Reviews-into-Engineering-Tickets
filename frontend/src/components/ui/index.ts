@@ -8,6 +8,7 @@ export { TextReveal } from "./TextReveal";
 export { TicketCard } from "./TicketCard";
 export { KanbanBoard } from "./KanbanBoard";
 export type { Ticket } from "./KanbanBoard";
+export { RoastArena } from "./RoastArena";
 export { EmptyState } from "./EmptyState";
 export type { Severity, TicketCardProps } from "./TicketCard";
 export { Preloader } from "./Preloader";

@@ -13,11 +13,13 @@
  * status and renders in the order it's given, it doesn't re-sort.
  */
 
-import { motion, LayoutGroup } from "framer-motion";
-import { Flame, UserCheck, Wrench, CheckCircle2, XCircle } from "lucide-react";
+import { motion, AnimatePresence, LayoutGroup } from "framer-motion";
+import { Flame, UserCheck, Wrench, CheckCircle2, XCircle, MousePointer2, X } from "lucide-react";
 import { TicketCard } from "./TicketCard";
 import { cn } from "@/lib/utils";
 import { useRef, useEffect, useState } from "react";
+
+const DRAG_HINT_DISMISSED_KEY = "roast_kanban_drag_hint_dismissed";
 
 // Ticket type matching backend schema
 export interface Ticket {
@@ -30,6 +32,18 @@ export interface Ticket {
   device_type?: string;
   review_count: number;
   status: "fresh" | "assigned" | "fixing" | "resolved" | "wont_fix";
+  /** Fused triage score (severity + AI faithfulness + regression + volume) -- same formula as /triage-queue. Optional: only populated where the caller computes it (see dashboard/page.tsx). */
+  priorityScore?: number;
+  /** The four components priorityScore is built from, for a visual breakdown (Roast Arena's power bar). */
+  priorityBreakdown?: {
+    severityWeight: number;
+    faithfulness: number;
+    regressionBoost: number;
+    velocity: number;
+  };
+  regressionDetected?: boolean;
+  regressionOfTitle?: string | null;
+  regressionConfidence?: number | null;
 }
 
 interface KanbanColumnProps {
@@ -186,13 +200,61 @@ export function KanbanBoard({ tickets, className, onStatusChange, movingId }: Ka
   const resolvedTickets = tickets.filter((t) => t.status === "resolved");
   const wontFixTickets = tickets.filter((t) => t.status === "wont_fix");
 
+  // One-time discoverability hint: dragging cards between columns isn't
+  // obvious from looking at the board (no visible affordance until you
+  // hover a card), and plenty of users have never touched a Jira/Trello-
+  // style board to already know the pattern. Shown once, dismissed
+  // permanently via localStorage -- never nags on repeat visits.
+  const [showDragHint, setShowDragHint] = useState(false);
+  useEffect(() => {
+    if (!onStatusChange) return;
+    try {
+      if (!window.localStorage.getItem(DRAG_HINT_DISMISSED_KEY)) {
+        setShowDragHint(true);
+      }
+    } catch {
+      // localStorage unavailable (private mode etc.) -- just skip the hint
+      // rather than risk it reappearing every render.
+    }
+  }, [onStatusChange]);
+
+  const dismissDragHint = () => {
+    setShowDragHint(false);
+    try {
+      window.localStorage.setItem(DRAG_HINT_DISMISSED_KEY, "1");
+    } catch {
+      // best-effort only
+    }
+  };
+
   return (
-    <div
-      className={cn(
-        "flex gap-6 h-full overflow-x-auto pb-2",
-        className
-      )}
-    >
+    <div className={className}>
+      <AnimatePresence>
+        {showDragHint && (
+          <motion.div
+            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+            animate={{ opacity: 1, height: "auto", marginBottom: 16 }}
+            exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-500/10 border border-orange-500/20 text-sm text-orange-200">
+              <MousePointer2 className="w-4 h-4 shrink-0 text-orange-400" />
+              <span className="flex-1">
+                Tip: drag a card into another column to change its status.
+              </span>
+              <button
+                onClick={dismissDragHint}
+                className="p-1 rounded-md hover:bg-white/10 transition-colors shrink-0"
+                aria-label="Dismiss tip"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex gap-6 h-full overflow-x-auto pb-2">
       <KanbanColumn
         title="Fresh Roast"
         icon={<Flame className="w-5 h-5 text-white" />}
@@ -243,6 +305,7 @@ export function KanbanBoard({ tickets, className, onStatusChange, movingId }: Ka
         movingId={movingId}
         className="min-w-[280px] flex-1"
       />
+      </div>
     </div>
   );
 }

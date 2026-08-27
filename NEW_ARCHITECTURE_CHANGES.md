@@ -717,6 +717,38 @@ This same real upload's 5 CRITICAL clusters fired **5 separate Discord messages*
 
 ---
 
+## 27. Kanban drag discoverability + drop confirmation, then a new alternate view: Roast Arena (2026-08-27)
+
+**Touched:** `frontend/src/components/ui/TicketCard.tsx`, `frontend/src/components/ui/KanbanBoard.tsx`
+**New:** `frontend/src/components/ui/RoastArena.tsx`
+**Touched:** `frontend/src/app/(app)/dashboard/page.tsx`, `frontend/src/components/ui/index.ts`
+
+Raised directly: the Kanban board (§22/§23) had no visual cue that cards were draggable at all, and dropping one gave zero feedback -- a successful move and a silently-ignored one looked identical. Fixed both, then went further: "drag a card to change its status" is table-stakes (every Jira/Trello clone does it), so it doesn't make the product feel distinct. Built a genuinely different view on top of data that already existed but was previously invisible.
+
+### 27a. Discoverability + feedback (small, on the existing board)
+- `TicketCard` now shows a `GripVertical` handle on hover (`opacity-0 group-hover:opacity-50`) and a `cursor-grab` / lift-on-hover style -- signals "this moves" before a user ever touches it, rather than relying on prior Kanban experience they may not have (raised directly: not everyone has used Jira/Trello).
+- `KanbanBoard` shows a one-time dismissible tip ("Tip: drag a card into another column to change its status") gated on `localStorage` (`roast_kanban_drag_hint_dismissed`) -- shown once ever, never nags again.
+- `dashboard/page.tsx` now shows a toast on every drop: success ("Moved ... to Fixing") with an **Undo** button that calls the same status-change handler in reverse, or a failure toast ("Couldn't move that ticket — it's back where it was") when the PATCH fails. Previously a failed drop reverted silently with only a `console.error` -- invisible to an actual user.
+
+### 27b. Roast Arena — a ranked leaderboard, not another grid
+New alternate view (`view: "arena" | "board"` toggle on the dashboard, defaults to Arena). Instead of columns-by-status, it's one ranked list using the exact fused priority score already computed for `/triage-queue` (§15.2) and now also for Kanban sort order (§23) -- except that score previously only ever existed as an invisible sort key. Arena makes it the entire point of the view:
+
+- **Power bar per card**: the score's four real components (severity weight, AI faithfulness × 20, regression boost, log-scaled volume) rendered as a literal stacked bar (red/sky/purple/emerald), not a hidden number. `dashboard/page.tsx`'s `priorityBreakdown()` returns these four values now, not just the summed total.
+- **Rank-swap animation**: `framer-motion`'s `layout` prop on each row turns any reorder (an AI eval landing, a regression detected, a manual status change) into a visible swap instead of a silent re-sort. Top 3 get medal styling (🥇🥈🥉) with a matching glow.
+- **KO on resolve**: resolving or won't-fixing a card removes it from the ranked list via `AnimatePresence`'s `exit` animation (scale down + rotate + fade) instead of it just disappearing on the next render. Settled tickets move to a compact "Ringside" strip below, so nothing vanishes without a trace.
+- **"Back in the arena" entrance**: a ticket with `regression_detected=true` that this browser hasn't seen before gets a loud one-time entrance (slide in from the side + a pulsing red glow + a "⚡ Back in the arena — fix didn't hold" banner) instead of just quietly showing a badge like the analytics page's existing `FIX DIDN'T HOLD` badge. Seen-state tracked in `localStorage` (`roast_arena_seen_regressions`) so it plays once per browser, not on every reload.
+- Quick status-action buttons (Assign / Fixing / Resolve / Won't fix) replace native drag-and-drop as the primary interaction inside Arena -- reordering already happens automatically via the `layout` animation when scores/status change, so a button click reads just as cleanly as a drag without needing precise drop-target coordinates in a single ranked list.
+
+`Ticket` gained optional `priorityScore`, `priorityBreakdown`, `regressionDetected`, `regressionOfTitle`, `regressionConfidence` fields (KanbanBoard.tsx) -- optional so the existing Board view and any other consumer of `Ticket` is unaffected if they're not populated.
+
+### Verified
+- Live in the browser: medal styling, power bars with correct per-segment proportions, and rank numbers (#4, #5, ...) all rendered correctly for a real 50-cluster dataset.
+- Clicked "Resolve" on a real cluster (351): the row animated out immediately, the rest of the ranked list reflowed up, and the real `PATCH /clusters/351/status` fired and returned `{"status":"resolved","resolved_at":"..."}`. The card then appeared in the Ringside strip.
+- Confirmed the Board toggle still renders the original Kanban view unchanged -- Arena is additive, not a replacement, so §22/23's already-verified drag-and-drop path stays intact as a fallback.
+- Test cluster (351) reverted back to `fresh_roast` afterward.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -746,3 +778,4 @@ This same real upload's 5 CRITICAL clusters fired **5 separate Discord messages*
 | Repro-stub malformed-output retry | Immediate retry, no backoff | 2s backoff before the retry, matching `_call_nvidia_api`'s pattern |
 | RAGAS Faithfulness/AnswerRelevancy budget | max_tokens=3000 (still truncated under real load) | max_tokens=8000, sized to the real observed worst case (6,298 tokens) |
 | Multi-finding alerts | One Discord/Slack message per critical cluster/regression | One batched message per upload, with app name + review count + a real clickable link |
+| Ticket triage view | Kanban only, no drag affordance, silent drop feedback, priority score invisible | Kanban (with hover handle + hint + toast) plus Roast Arena — a ranked leaderboard with a per-card score power-bar, rank-swap animation, and a dramatic "back in the arena" regression re-entry |

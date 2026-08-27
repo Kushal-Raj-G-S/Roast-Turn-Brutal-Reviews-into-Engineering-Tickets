@@ -6,15 +6,30 @@
  * Features: Real user data, roast history, live stats
  */
 
-import { motion } from "framer-motion";
-import { Flame, TrendingUp, Clock, CheckCircle2, Database, AlertTriangle } from "lucide-react";
-import { KanbanBoard, Ticket } from "@/components/ui";
+import { motion, AnimatePresence } from "framer-motion";
+import { Flame, TrendingUp, Clock, CheckCircle2, Database, AlertTriangle, Undo2, X, Trophy, LayoutGrid } from "lucide-react";
+import { KanbanBoard, RoastArena, Ticket } from "@/components/ui";
 import { SpotlightCard } from "@/components/ui";
 import { UsageDashboard } from "@/components/dashboard/UsageDashboard";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import { apiClient } from "@/lib/api-client";
+
+const STATUS_LABELS: Record<Ticket["status"], string> = {
+  fresh: "Fresh Roast",
+  assigned: "Assigned",
+  fixing: "Fixing",
+  resolved: "Resolved",
+  wont_fix: "Won't Fix",
+};
+
+interface MoveToast {
+  kind: "success" | "error";
+  message: string;
+  /** Only set on success -- lets the user immediately reverse a drag they didn't mean to make. */
+  undo?: () => void;
+}
 
 interface UserProfile {
   id: string;
@@ -42,6 +57,15 @@ export default function DashboardPage() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [movingTicketId, setMovingTicketId] = useState<string | null>(null);
+  const [view, setView] = useState<"arena" | "board">("arena");
+  const [moveToast, setMoveToast] = useState<MoveToast | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showMoveToast = (toast: MoveToast) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setMoveToast(toast);
+    toastTimerRef.current = setTimeout(() => setMoveToast(null), 5000);
+  };
 
   // Drag-and-drop status changes -- KanbanBoard's 5 visual columns now map
   // 1:1 onto the backend's 5 real statuses (see PATCH /clusters/{id}/status).
@@ -60,11 +84,13 @@ export default function DashboardPage() {
   // (severity + AI faithfulness + regression signal + log-scaled volume) --
   // mirrored here so cards within a column are already ranked "fix this
   // first" without an extra round-trip. Kept in sync with
-  // backend/app/api/bulk_routes.py's _priority_score.
+  // backend/app/api/bulk_routes.py's _priority_score. Returns the four
+  // components separately too -- Roast Arena renders them as a literal
+  // power bar instead of a hidden sort key.
   const SEVERITY_WEIGHT: Record<string, number> = { critical: 100, high: 70, medium: 40, low: 15 };
-  const priorityScore = (cluster: any): number => {
+  const priorityBreakdown = (cluster: any) => {
     const severityWeight = SEVERITY_WEIGHT[(cluster.severity || "").toLowerCase()] ?? 20;
-    const faithfulness =
+    const faithfulnessRaw =
       typeof cluster.ai_metadata?.eval_scores?.faithfulness === "number"
         ? cluster.ai_metadata.eval_scores.faithfulness
         : 0.5;
@@ -72,10 +98,14 @@ export default function DashboardPage() {
       ? 30 * (typeof cluster.regression_confidence === "number" ? cluster.regression_confidence : 0.5)
       : 0;
     const velocity = Math.log1p(Math.max(cluster.review_count || 0, 0)) * 5;
-    return severityWeight + faithfulness * 20 + regressionBoost + velocity;
+    return { severityWeight, faithfulness: faithfulnessRaw * 20, regressionBoost, velocity };
+  };
+  const priorityScore = (cluster: any): number => {
+    const b = priorityBreakdown(cluster);
+    return b.severityWeight + b.faithfulness + b.regressionBoost + b.velocity;
   };
 
-  const handleStatusChange = async (ticketId: string, newVisualStatus: Ticket["status"]) => {
+  const handleStatusChange = async (ticketId: string, newVisualStatus: Ticket["status"], isUndo = false) => {
     const ticket = tickets.find((t) => t.id === ticketId);
     if (!ticket || ticket.status === newVisualStatus) return;
 
@@ -87,10 +117,21 @@ export default function DashboardPage() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.access_token) apiClient.setToken(session.access_token);
       await apiClient.updateClusterStatus(Number(ticketId), VISUAL_TO_BACKEND_STATUS[newVisualStatus]);
+
+      // Confirms the drop actually did something -- without this, a
+      // successful move looks identical to a dropped/ignored click. Skip
+      // the "you can undo this" affordance on the undo action itself, or
+      // undoing an undo would just chain forever.
+      showMoveToast({
+        kind: "success",
+        message: `Moved "${ticket.title.slice(0, 40)}${ticket.title.length > 40 ? "…" : ""}" to ${STATUS_LABELS[newVisualStatus]}`,
+        undo: isUndo ? undefined : () => handleStatusChange(ticketId, previousStatus, true),
+      });
     } catch (err) {
       console.error("Failed to update cluster status:", err);
       // Revert -- the drag looked like it worked but the database rejected it.
       setTickets((prev) => prev.map((t) => (t.id === ticketId ? { ...t, status: previousStatus } : t)));
+      showMoveToast({ kind: "error", message: "Couldn't move that ticket — it's back where it was." });
     } finally {
       setMovingTicketId(null);
     }
@@ -189,6 +230,11 @@ export default function DashboardPage() {
                   cluster.status === 'in_progress' ? 'fixing' :
                   cluster.status === 'resolved' ? 'resolved' :
                   cluster.status === 'wont_fix' ? 'wont_fix' : 'fresh',
+          priorityScore: priorityScore(cluster),
+          priorityBreakdown: priorityBreakdown(cluster),
+          regressionDetected: !!cluster.regression_detected,
+          regressionOfTitle: cluster.regression_of_title ?? null,
+          regressionConfidence: cluster.regression_confidence ?? null,
         }));
 
       setTickets(clusterTickets);
@@ -320,16 +366,87 @@ export default function DashboardPage() {
             </p>
           </div>
           {tickets.length > 0 && (
-            <button
-              onClick={() => router.push('/clusters')}
-              className="px-4 py-2 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 text-white font-medium hover:from-orange-600 hover:to-red-700 transition-all"
-            >
-              View All Datasets
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center rounded-full bg-white/5 border border-white/10 p-0.5">
+                <button
+                  onClick={() => setView("arena")}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${
+                    view === "arena" ? "bg-white/10 text-white" : "text-neutral-500 hover:text-neutral-300"
+                  }`}
+                >
+                  <Trophy className="w-3.5 h-3.5" />
+                  Arena
+                </button>
+                <button
+                  onClick={() => setView("board")}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${
+                    view === "board" ? "bg-white/10 text-white" : "text-neutral-500 hover:text-neutral-300"
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  Board
+                </button>
+              </div>
+              <button
+                onClick={() => router.push('/clusters')}
+                className="px-4 py-2 rounded-lg bg-gradient-to-r from-orange-500 to-red-600 text-white font-medium hover:from-orange-600 hover:to-red-700 transition-all"
+              >
+                View All Datasets
+              </button>
+            </div>
           )}
         </div>
-        <KanbanBoard tickets={tickets} onStatusChange={handleStatusChange} movingId={movingTicketId} />
+        {view === "arena" ? (
+          <RoastArena tickets={tickets} onStatusChange={handleStatusChange} movingId={movingTicketId} />
+        ) : (
+          <KanbanBoard tickets={tickets} onStatusChange={handleStatusChange} movingId={movingTicketId} />
+        )}
       </motion.div>
+
+      {/* Drag-drop confirmation toast -- without this, a successful drop
+          and an ignored/failed drop look identical to the user. */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+        <AnimatePresence>
+          {moveToast && (
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+              className={`pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl backdrop-blur-xl ${
+                moveToast.kind === "success"
+                  ? "bg-emerald-950/90 border-emerald-500/30 text-emerald-100"
+                  : "bg-red-950/90 border-red-500/30 text-red-100"
+              }`}
+            >
+              {moveToast.kind === "success" ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+              )}
+              <span className="text-sm">{moveToast.message}</span>
+              {moveToast.undo && (
+                <button
+                  onClick={() => {
+                    moveToast.undo?.();
+                    setMoveToast(null);
+                  }}
+                  className="flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-md bg-white/10 hover:bg-white/20 transition-colors shrink-0"
+                >
+                  <Undo2 className="w-3 h-3" />
+                  Undo
+                </button>
+              )}
+              <button
+                onClick={() => setMoveToast(null)}
+                className="shrink-0 opacity-60 hover:opacity-100 transition-opacity"
+                aria-label="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
