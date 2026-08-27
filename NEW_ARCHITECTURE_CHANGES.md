@@ -749,6 +749,36 @@ New alternate view (`view: "arena" | "board"` toggle on the dashboard, defaults 
 
 ---
 
+## 28. Settings: real Change Password + real Two-Factor Auth (Supabase Auth, zero new services) (2026-08-28)
+
+**Touched:** `frontend/src/app/(app)/settings/page.tsx`, `frontend/src/proxy.ts`
+**New:** `frontend/src/app/(auth)/verify-2fa/page.tsx`
+
+Auditing Settings found roughly 60% of the page was decoration: a "Save Changes" button with no `onClick` at all, notification toggles that never persisted anywhere, and a "Change Password" / "Two-Factor Auth" pair that were both dead buttons. Wired the two identity-security ones for real, using Supabase Auth features already available on the existing project (no new service, no new cost) rather than building custom backend auth machinery.
+
+### Change Password
+`handleChangePassword` in `settings/page.tsx` first calls `supabase.auth.signInWithPassword({email, password: currentPassword})` to confirm the person submitting the form actually knows the current password (an active session alone doesn't prove that), then `supabase.auth.updateUser({password: newPassword})`. Client-side only, no backend route needed.
+
+### Two-Factor Auth (TOTP) -- and the part that actually matters: enforcement
+Enrolling a factor in Settings (`supabase.auth.mfa.enroll` → QR code + manual-entry secret → `challenge`/`verify` to confirm) does **not** by itself change anything about how sign-in works -- Supabase issues an `aal1` session either way unless something explicitly checks the session's assurance level and blocks on it. A Settings toggle with no enforcement anywhere would be pure theater: the factor would exist, nothing would ever ask for it.
+
+The actual gate lives in `proxy.ts` (server-side middleware), not the login page -- deliberately, so it applies no matter how the session was created (password, Google OAuth, GitHub OAuth, or a still-valid cookie from a prior visit): after confirming a session exists, it calls `supabase.auth.mfa.getAuthenticatorAssuranceLevel()`; if `nextLevel === 'aal2'` and the current session hasn't reached it, every protected route redirects to a new `/verify-2fa` page instead of rendering. That page checks the same AAL, challenges the user's verified TOTP factor, and on success does a full navigation to `/dashboard` so the middleware re-evaluates with the now-elevated session cookie.
+
+**A gap found and closed while building this:** `protectedPaths` in `proxy.ts` only ever listed `/dashboard`, `/settings`, and `/api/roast` -- `/analytics`, `/upload`, `/clusters`, and `/ai-debug` relied solely on each page's own client-side `useEffect` redirect, which only fires after the page has already started rendering and would never have enforced the aal2 gate at all. Extended `protectedPaths` and the middleware `matcher` to cover the full `(app)` route group, closing a real bypass this feature would otherwise have shipped with.
+
+### Verified -- the real round trip, not just the enroll step
+This mattered enough to test end-to-end rather than trust the code path in isolation, since a broken 2FA flow would lock the real account out of itself:
+- Enrolled a real TOTP factor on the real account via the Settings UI, computed a valid 6-digit code from the returned secret using the standard RFC 6238 algorithm (implemented inline in a browser `crypto.subtle` HMAC-SHA1 call -- no external authenticator app, no third-party service), and confirmed enrollment.
+- **Found mid-test**: the real account signs in via Google OAuth and has no Supabase password at all -- confirmed the password-change form correctly rejects a wrong current password ("Current password is incorrect") without ever needing to touch the real (non-existent) password.
+- Signed out for real, signed back in via Google (the existing browser Google session, no credentials typed), and confirmed the middleware correctly redirected to `/verify-2fa` **for an OAuth sign-in**, not just a password one.
+- Computed a fresh TOTP code and verified the challenge -- landed on the real dashboard, confirming the full loop (enroll → real sign-out → real sign-in → server-side redirect → challenge → elevated session → protected page) works end-to-end.
+- Disabled the factor afterward and confirmed via the UI (the "Set up" prompt reappeared) that the account is back to its original, no-2FA state -- before starting this test, an emergency rollback script (using the project's own service-role key to force-delete the factor via Supabase's admin API) was written and confirmed reachable, in case anything in the browser-based flow had failed partway through.
+
+### Not done here (kept in scope)
+Active Sessions and Privacy Settings (export/delete data) are still dead buttons -- separate, larger pieces of work, not touched in this pass.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -779,3 +809,5 @@ New alternate view (`view: "arena" | "board"` toggle on the dashboard, defaults 
 | RAGAS Faithfulness/AnswerRelevancy budget | max_tokens=3000 (still truncated under real load) | max_tokens=8000, sized to the real observed worst case (6,298 tokens) |
 | Multi-finding alerts | One Discord/Slack message per critical cluster/regression | One batched message per upload, with app name + review count + a real clickable link |
 | Ticket triage view | Kanban only, no drag affordance, silent drop feedback, priority score invisible | Kanban (with hover handle + hint + toast) plus Roast Arena — a ranked leaderboard with a per-card score power-bar, rank-swap animation, and a dramatic "back in the arena" regression re-entry |
+| Change Password / 2FA | Both dead buttons, no `onClick` | Real Supabase Auth password change (re-verifies current password) + real TOTP 2FA enforced server-side in `proxy.ts` for every sign-in method |
+| Protected-route coverage | Only `/dashboard`, `/settings`, `/api/roast` gated server-side | All of `(app)` (`/analytics`, `/upload`, `/clusters`, `/ai-debug` too) gated server-side, closing a real client-only-redirect gap |
