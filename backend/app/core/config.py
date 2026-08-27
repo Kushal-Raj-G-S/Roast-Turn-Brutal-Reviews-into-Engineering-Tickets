@@ -58,6 +58,12 @@ class Config:
     VAPID_PRIVATE_KEY: Optional[str] = os.getenv("VAPID_PRIVATE_KEY")
     VAPID_PUBLIC_KEY: Optional[str] = os.getenv("VAPID_PUBLIC_KEY")
     VAPID_SUBJECT: str = os.getenv("VAPID_SUBJECT", "mailto:admin@roast.systems")
+
+    # Email (Resend) -- free tier, 3000 emails/month, no card required.
+    # RESEND_FROM_EMAIL defaults to Resend's shared onboarding domain, which
+    # sends immediately with zero DNS setup.
+    RESEND_API_KEY: Optional[str] = os.getenv("RESEND_API_KEY")
+    RESEND_FROM_EMAIL: str = os.getenv("RESEND_FROM_EMAIL", "Roast <onboarding@resend.dev>")
     
     # Negative keywords (reviews with these are NEVER noise)
     NEGATIVE_KEYWORDS = [

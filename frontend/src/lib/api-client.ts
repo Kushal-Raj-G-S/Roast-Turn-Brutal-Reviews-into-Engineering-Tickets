@@ -384,7 +384,12 @@ class APIClient {
   }
 
   // ── Proactive alerting settings ──────────────────────────────────────
-  async getAlertSettings(): Promise<{ alert_webhook_url: string | null; alerts_enabled: boolean }> {
+  async getAlertSettings(): Promise<{
+    alert_webhook_url: string | null;
+    alerts_enabled: boolean;
+    email_alerts_enabled: boolean;
+    weekly_digest_enabled: boolean;
+  }> {
     const response = await fetch(`${this.baseURL}/settings/alerts`, {
       headers: this.getHeaders(true),
     });
@@ -395,7 +400,14 @@ class APIClient {
   async updateAlertSettings(payload: {
     alert_webhook_url?: string | null;
     alerts_enabled?: boolean;
-  }): Promise<{ alert_webhook_url: string | null; alerts_enabled: boolean }> {
+    email_alerts_enabled?: boolean;
+    weekly_digest_enabled?: boolean;
+  }): Promise<{
+    alert_webhook_url: string | null;
+    alerts_enabled: boolean;
+    email_alerts_enabled: boolean;
+    weekly_digest_enabled: boolean;
+  }> {
     const response = await fetch(`${this.baseURL}/settings/alerts`, {
       method: 'PUT',
       headers: this.getHeaders(true),
@@ -416,6 +428,18 @@ class APIClient {
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || 'Test alert failed');
+    }
+    return response.json();
+  }
+
+  async testAlertEmail(): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseURL}/settings/alerts/test-email`, {
+      method: 'POST',
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Test email failed');
     }
     return response.json();
   }

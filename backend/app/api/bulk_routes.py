@@ -1038,11 +1038,15 @@ async def health_check_db():
 class AlertSettingsResponse(BaseModel):
     alert_webhook_url: Optional[str] = None
     alerts_enabled: bool = True
+    email_alerts_enabled: bool = True
+    weekly_digest_enabled: bool = True
 
 
 class AlertSettingsUpdate(BaseModel):
     alert_webhook_url: Optional[str] = None
     alerts_enabled: Optional[bool] = None
+    email_alerts_enabled: Optional[bool] = None
+    weekly_digest_enabled: Optional[bool] = None
 
 
 @router.get("/settings/alerts", response_model=AlertSettingsResponse)
@@ -1050,6 +1054,8 @@ async def get_alert_settings(user: Profile = Depends(get_current_user)):
     return AlertSettingsResponse(
         alert_webhook_url=user.alert_webhook_url,
         alerts_enabled=bool(user.alerts_enabled) if user.alerts_enabled is not None else True,
+        email_alerts_enabled=bool(user.email_alerts_enabled) if user.email_alerts_enabled is not None else True,
+        weekly_digest_enabled=bool(user.weekly_digest_enabled) if user.weekly_digest_enabled is not None else True,
     )
 
 
@@ -1070,6 +1076,10 @@ async def update_alert_settings(
         profile.alert_webhook_url = url or None
     if body.alerts_enabled is not None:
         profile.alerts_enabled = body.alerts_enabled
+    if body.email_alerts_enabled is not None:
+        profile.email_alerts_enabled = body.email_alerts_enabled
+    if body.weekly_digest_enabled is not None:
+        profile.weekly_digest_enabled = body.weekly_digest_enabled
 
     session.add(profile)
     session.commit()
@@ -1078,6 +1088,8 @@ async def update_alert_settings(
     return AlertSettingsResponse(
         alert_webhook_url=profile.alert_webhook_url,
         alerts_enabled=bool(profile.alerts_enabled),
+        email_alerts_enabled=bool(profile.email_alerts_enabled),
+        weekly_digest_enabled=bool(profile.weekly_digest_enabled),
     )
 
 
@@ -1132,6 +1144,22 @@ async def test_alert_webhook(user: Profile = Depends(get_current_user)):
     )
     if not ok:
         raise HTTPException(status_code=502, detail="Webhook did not accept the test message — double-check the URL")
+    return {"status": "sent"}
+
+
+@router.post("/settings/alerts/test-email")
+async def test_alert_email(user: Profile = Depends(get_current_user)):
+    from app.services import notifications
+
+    ok, err = await notifications.send_email(
+        user.email,
+        "🔥 Roast test email",
+        notifications._email_shell(
+            "<p>If you can see this, email alerts are wired up correctly.</p>"
+        ),
+    )
+    if not ok:
+        raise HTTPException(status_code=502, detail=err or "Email did not send")
     return {"status": "sent"}
 
 

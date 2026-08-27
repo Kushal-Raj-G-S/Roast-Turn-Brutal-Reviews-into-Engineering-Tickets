@@ -177,10 +177,11 @@ async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[C
     """
     Proactive alerting: notify the user for the two events actually worth
     interrupting someone for -- a fix that didn't hold, and a brand-new
-    CRITICAL cluster. Two independent channels, both gated on
-    profile.alerts_enabled: a Slack/Discord webhook (if one is configured)
-    and browser Web Push (if any device has subscribed) -- a user can have
-    either, both, or neither, and each is silently skipped if not set up.
+    CRITICAL cluster. Three independent channels, each with its own gate:
+    Slack/Discord webhook + browser Web Push share profile.alerts_enabled,
+    while email has its own profile.email_alerts_enabled -- a user can want
+    Discord/push on but email off (or vice versa), so these aren't the same
+    flag. Each channel is silently skipped if not configured/enabled.
 
     Batched into ONE message per upload instead of one message per finding --
     an upload with 5 new critical clusters previously fired 5 separate
@@ -197,7 +198,7 @@ async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[C
     from app.services import notifications
 
     profile = session.get(Profile, upload.user_id)
-    if not profile or not profile.alerts_enabled:
+    if not profile:
         return
 
     critical_items = []
@@ -214,7 +215,7 @@ async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[C
     app_name = (upload.filename or f"Upload #{upload.id}").rsplit(".", 1)[0]
     total = len(critical_items) + len(regression_items)
 
-    if profile.alert_webhook_url:
+    if profile.alerts_enabled and profile.alert_webhook_url:
         text = notifications.format_batch_alert(
             app_name, upload.id, upload.total_reviews or 0, critical_items, regression_items
         )
@@ -224,30 +225,44 @@ async def _send_upload_alerts(session: Session, upload: Upload, clusters: List[C
                 f"{len(regression_items)} regression) for upload {upload.id}"
             )
 
-    push_subs = session.exec(
-        select(PushSubscription).where(PushSubscription.user_id == upload.user_id)
-    ).all()
-    if push_subs:
-        push_title = f"{total} issue{'s' if total != 1 else ''} in {app_name}"
-        push_body = (
-            regression_items[0][0] if regression_items and not critical_items
-            else critical_items[0][0] if critical_items
-            else "New findings ready to review"
-        )
-        push_url = notifications.upload_link(upload.id)
-        sent_push = 0
-        for sub in push_subs:
-            ok, is_gone = notifications.send_push(
-                {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
-                push_title, push_body, url=push_url,
+    if profile.alerts_enabled:
+        push_subs = session.exec(
+            select(PushSubscription).where(PushSubscription.user_id == upload.user_id)
+        ).all()
+        if push_subs:
+            push_title = f"{total} issue{'s' if total != 1 else ''} in {app_name}"
+            push_body = (
+                regression_items[0][0] if regression_items and not critical_items
+                else critical_items[0][0] if critical_items
+                else "New findings ready to review"
             )
-            if ok:
-                sent_push += 1
-            elif is_gone:
-                session.delete(sub)
-        if sent_push:
-            logger.info(f"📱 Sent push notification to {sent_push} device(s) for upload {upload.id}")
-        session.commit()
+            push_url = notifications.upload_link(upload.id)
+            sent_push = 0
+            for sub in push_subs:
+                ok, is_gone = notifications.send_push(
+                    {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
+                    push_title, push_body, url=push_url,
+                )
+                if ok:
+                    sent_push += 1
+                elif is_gone:
+                    session.delete(sub)
+            if sent_push:
+                logger.info(f"📱 Sent push notification to {sent_push} device(s) for upload {upload.id}")
+            session.commit()
+
+    if profile.email_alerts_enabled and profile.email:
+        subject, html = notifications.format_batch_alert_email(
+            app_name, upload.id, upload.total_reviews or 0, critical_items, regression_items
+        )
+        sent, err = await notifications.send_email(profile.email, subject, html)
+        if sent:
+            logger.info(
+                f"📧 Sent 1 batched email alert ({len(critical_items)} critical, "
+                f"{len(regression_items)} regression) for upload {upload.id}"
+            )
+        else:
+            logger.warning(f"Email alert failed for upload {upload.id}: {err}")
 
 
 # Global orchestrator instance (lazy initialization)

@@ -804,6 +804,33 @@ Generated the VAPID keypair with `py-vapid`, then stored the private key as base
 
 ---
 
+## 30. Real email notifications + weekly digest (Resend, free tier) (2026-08-28)
+
+**New:** `backend/app/services/weekly_digest.py`, `backend/migrations/add_email_notification_settings.sql`
+**Touched:** `backend/app/services/notifications.py` (`send_email`, `format_batch_alert_email`, `format_digest_email`), `backend/app/core/config.py`, `backend/app/models/models_supabase.py`, `backend/app/api/bulk_routes.py`, `backend/app/core/shadow_deployment.py`, `backend/app/main.py`, `frontend/src/lib/api-client.ts`, `frontend/src/app/(app)/settings/page.tsx`
+
+The last two fake Settings toggles -- Email Notifications and Weekly Digest -- are now real, using Resend's free tier (3,000 emails/month, no card) rather than a paid transactional-email provider. Sent via `httpx` directly against Resend's REST API; no SDK dependency needed.
+
+### New
+- `profiles.email_alerts_enabled` / `profiles.weekly_digest_enabled` (new migration, own independent flags -- a user can want Discord/push on but email off, or vice versa; §25-29's `alerts_enabled` only ever covered webhook+push).
+- `_send_upload_alerts` now fires a third, independent channel: an HTML email (`format_batch_alert_email`) for the same two events as Discord/push (new CRITICAL cluster, fix didn't hold), gated on `email_alerts_enabled` rather than the webhook/push flag.
+- `send_weekly_digests()` (new `weekly_digest.py`) -- one email per user covering every app they uploaded in the past 7 days (grouped, not per-upload), skipping users with zero uploads in the window entirely rather than sending an empty "nothing happened" email. Scheduled via `APScheduler` directly inside the FastAPI process (`main.py`'s lifespan, `CronTrigger(day_of_week="mon", hour=9)`) -- no external cron, no separate worker process, no new infra.
+- Settings' Email Notifications and Weekly Digest toggles now persist for real via the existing `/settings/alerts` endpoint (extended with the two new fields) instead of local-only state; a new "Send test email" action round-trips through the real backend.
+
+### A real, load-bearing limitation found during testing (not a bug, a Resend account-tier restriction)
+Resend's free/unverified tier will only deliver to **the email address the Resend account itself was signed up with** -- not arbitrary recipients. Confirmed directly: sending to the actual demo account's email (`kushalrajgs@gmail.com`) returned a real `403` (`"You can only send testing emails to your own email address (gskushi100@gmail.com)..."`), while the same call to the Resend-signup address succeeded. This means real multi-user email delivery needs a verified domain on Resend (SPF/DKIM DNS records at the registrar) and `RESEND_FROM_EMAIL` changed to an address on that domain -- not something fixable in code. Improved `send_email` to return `(success, error_detail)` instead of a bare bool specifically so this real reason surfaces in the UI ("Send test email") instead of a generic "something broke" message.
+
+### Verified
+- Sent a real email through the full pipeline to the Resend-account address -- delivered successfully, confirming the request shape, auth header, and HTML template are all correct.
+- Confirmed the exact same call correctly fails with Resend's real 403 for a different recipient, and that this now surfaces verbatim in the Settings UI rather than a generic error.
+- Manually triggered `send_weekly_digests()` directly against the real database: found all 3 profiles with uploads in the last 7 days, attempted a send for each independently, and confirmed one user's failure didn't stop the others from being attempted -- the per-user isolation works correctly, even though every send failed for the same Resend sandbox reason above.
+- Restarted the backend and confirmed the scheduler registers and starts cleanly (`Added job "send_weekly_digests"` / `Scheduler started` in the real startup log).
+
+### Not done here
+Verifying a real domain with Resend (so email actually reaches real users, not just the developer's own inbox) is a DNS-level action outside what code can fix -- flagged clearly to the user as the next real step if this needs to work beyond testing.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -837,3 +864,4 @@ Generated the VAPID keypair with `py-vapid`, then stored the private key as base
 | Change Password / 2FA | Both dead buttons, no `onClick` | Real Supabase Auth password change (re-verifies current password) + real TOTP 2FA enforced server-side in `proxy.ts` for every sign-in method |
 | Protected-route coverage | Only `/dashboard`, `/settings`, `/api/roast` gated server-side | All of `(app)` (`/analytics`, `/upload`, `/clusters`, `/ai-debug` too) gated server-side, closing a real client-only-redirect gap |
 | Push Notifications toggle | Local UI state, did nothing | Real Web Push (self-hosted VAPID) — subscribes the real browser, fires on the same events as Discord/Slack alerts |
+| Email Notifications / Weekly Digest | Both local UI state, did nothing | Real transactional email (Resend) for the same alert events, plus a scheduled weekly digest across all apps — both independently toggleable and persisted |

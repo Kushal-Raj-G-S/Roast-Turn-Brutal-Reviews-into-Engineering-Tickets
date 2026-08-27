@@ -35,6 +35,10 @@ class Profile(Base):
     # from the URL at send time (notifications.py), so one field covers both.
     alert_webhook_url = Column(Text, nullable=True)
     alerts_enabled = Column(Boolean, nullable=False, server_default="true")
+    # Email is a separate channel from the webhook/push alerts_enabled flag
+    # above -- a user can want Discord/push on but email off, or vice versa.
+    email_alerts_enabled = Column(Boolean, nullable=False, server_default="true")
+    weekly_digest_enabled = Column(Boolean, nullable=False, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     

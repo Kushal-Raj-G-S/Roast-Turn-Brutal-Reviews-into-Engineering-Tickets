@@ -23,10 +23,13 @@ interface MfaFactor {
 export default function SettingsPage() {
   const [user, setUser] = useState<any>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [notifications, setNotifications] = useState({
-    email: true,
-    weekly: true,
-  });
+  // Email notifications + weekly digest -- real, persisted via the same
+  // /settings/alerts endpoint as the webhook (own independent flags,
+  // email_alerts_enabled / weekly_digest_enabled), not local-only state.
+  const [emailAlertsEnabled, setEmailAlertsEnabled] = useState(true);
+  const [weeklyDigestEnabled, setWeeklyDigestEnabled] = useState(true);
+  const [emailTestStatus, setEmailTestStatus] = useState<"idle" | "testing" | "tested" | "error">("idle");
+  const [emailTestError, setEmailTestError] = useState<string | null>(null);
 
   // Push notifications -- real Web Push (self-hosted VAPID, see lib/push.ts),
   // not a mock toggle. "subscribed" reflects THIS browser's actual service
@@ -120,6 +123,8 @@ export default function SettingsPage() {
       .then((s) => {
         setWebhookUrl(s.alert_webhook_url || "");
         setAlertsEnabled(s.alerts_enabled);
+        setEmailAlertsEnabled(s.email_alerts_enabled);
+        setWeeklyDigestEnabled(s.weekly_digest_enabled);
         setWebhookStatus("idle");
       })
       .catch(() => setWebhookStatus("idle"));
@@ -146,6 +151,42 @@ export default function SettingsPage() {
     } catch (e: any) {
       setWebhookStatus("error");
       setWebhookError(e.message || "Failed to save");
+    }
+  };
+
+  const toggleEmailAlerts = async () => {
+    const next = !emailAlertsEnabled;
+    setEmailAlertsEnabled(next); // optimistic -- a settings toggle should feel instant
+    try {
+      await ensureFreshToken();
+      await apiClient.updateAlertSettings({ email_alerts_enabled: next });
+    } catch {
+      setEmailAlertsEnabled(!next); // revert -- the flip looked like it worked but the save failed
+    }
+  };
+
+  const toggleWeeklyDigest = async () => {
+    const next = !weeklyDigestEnabled;
+    setWeeklyDigestEnabled(next);
+    try {
+      await ensureFreshToken();
+      await apiClient.updateAlertSettings({ weekly_digest_enabled: next });
+    } catch {
+      setWeeklyDigestEnabled(!next);
+    }
+  };
+
+  const testEmailAlert = async () => {
+    setEmailTestStatus("testing");
+    setEmailTestError(null);
+    try {
+      await ensureFreshToken();
+      await apiClient.testAlertEmail();
+      setEmailTestStatus("tested");
+      setTimeout(() => setEmailTestStatus("idle"), 2500);
+    } catch (e: any) {
+      setEmailTestStatus("error");
+      setEmailTestError(e.message || "Test email failed");
     }
   };
 
@@ -557,26 +598,47 @@ export default function SettingsPage() {
             </div>
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10">
-                <div className="flex items-center gap-3">
-                  <Mail className="w-4 h-4 text-neutral-500" />
-                  <div>
-                    <p className="text-sm text-white">Email Notifications</p>
-                    <p className="text-xs text-neutral-500">Get updates via email</p>
+              {/* Real, persisted via /settings/alerts (email_alerts_enabled) --
+                  fires for the same events as the Discord/push alerts. */}
+              <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Mail className="w-4 h-4 text-neutral-500" />
+                    <div>
+                      <p className="text-sm text-white">Email Notifications</p>
+                      <p className="text-xs text-neutral-500">Get an email on new critical issues or a fix that didn't hold</p>
+                    </div>
                   </div>
-                </div>
-                <button
-                  onClick={() => setNotifications(prev => ({ ...prev, email: !prev.email }))}
-                  className={`w-12 h-6 rounded-full transition-colors ${
-                    notifications.email ? 'bg-orange-500' : 'bg-neutral-700'
-                  }`}
-                >
-                  <div
-                    className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                      notifications.email ? 'translate-x-6' : 'translate-x-0.5'
+                  <button
+                    onClick={toggleEmailAlerts}
+                    className={`w-12 h-6 rounded-full transition-colors ${
+                      emailAlertsEnabled ? 'bg-orange-500' : 'bg-neutral-700'
                     }`}
-                  />
-                </button>
+                  >
+                    <div
+                      className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                        emailAlertsEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </div>
+                {emailTestError && <p className="text-xs text-red-400 mt-2">{emailTestError}</p>}
+                {emailAlertsEnabled && (
+                  <button
+                    onClick={testEmailAlert}
+                    disabled={emailTestStatus === "testing"}
+                    className="mt-3 flex items-center gap-1.5 text-xs text-neutral-400 hover:text-neutral-200 disabled:opacity-50"
+                  >
+                    {emailTestStatus === "testing" ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : emailTestStatus === "tested" ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Send className="w-3 h-3" />
+                    )}
+                    {emailTestStatus === "testing" ? "Sending…" : emailTestStatus === "tested" ? "Sent!" : "Send test email"}
+                  </button>
+                )}
               </div>
 
               {/* Real Web Push -- self-hosted VAPID, no third-party service.
@@ -637,14 +699,14 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <button
-                  onClick={() => setNotifications(prev => ({ ...prev, weekly: !prev.weekly }))}
+                  onClick={toggleWeeklyDigest}
                   className={`w-12 h-6 rounded-full transition-colors ${
-                    notifications.weekly ? 'bg-orange-500' : 'bg-neutral-700'
+                    weeklyDigestEnabled ? 'bg-orange-500' : 'bg-neutral-700'
                   }`}
                 >
                   <div
                     className={`w-5 h-5 bg-white rounded-full transition-transform ${
-                      notifications.weekly ? 'translate-x-6' : 'translate-x-0.5'
+                      weeklyDigestEnabled ? 'translate-x-6' : 'translate-x-0.5'
                     }`}
                   />
                 </button>

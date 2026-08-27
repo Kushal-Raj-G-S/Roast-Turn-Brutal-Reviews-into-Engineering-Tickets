@@ -161,3 +161,132 @@ def send_push(subscription: dict, title: str, body: str, url: Optional[str] = No
     except Exception as e:
         logger.warning(f"Push send failed (non-fatal): {e}")
         return False, False
+
+
+async def send_email(to_email: str, subject: str, html: str) -> tuple[bool, Optional[str]]:
+    """
+    Send one transactional email via Resend's REST API directly -- no SDK
+    needed beyond httpx, which is already a dependency everywhere else in
+    this file. Same best-effort contract as send_alert/send_push: never
+    raises. Returns (success, error_detail) rather than a bare bool --
+    unlike a webhook/push failure (which just gets logged in the
+    background alert path), an interactive "send test email" click needs
+    to surface *why* it failed. Resend's own free-tier restriction ("you
+    can only send to your own signup address until a domain is verified")
+    reads as a real, actionable error, not a generic "something broke."
+    """
+    if not config.RESEND_API_KEY:
+        return False, "RESEND_API_KEY is not configured"
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {config.RESEND_API_KEY}"},
+                json={
+                    "from": config.RESEND_FROM_EMAIL,
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": html,
+                },
+            )
+            if resp.status_code >= 300:
+                detail = resp.text[:300]
+                try:
+                    detail = resp.json().get("message", detail)
+                except Exception:
+                    pass
+                logger.warning(f"Resend send failed {resp.status_code}: {detail}")
+                return False, detail
+            return True, None
+    except Exception as e:
+        logger.warning(f"Email send failed (non-fatal): {e}")
+        return False, str(e)
+
+
+def _email_shell(inner_html: str) -> str:
+    """Minimal, dependency-free HTML wrapper -- dark, on-brand, renders
+    fine in every major email client without external CSS/fonts."""
+    return f"""
+    <div style="background:#0a0a0a;padding:32px 16px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
+      <div style="max-width:520px;margin:0 auto;background:#141414;border:1px solid #262626;border-radius:16px;overflow:hidden;">
+        <div style="padding:20px 24px;border-bottom:1px solid #262626;">
+          <span style="font-size:20px;font-weight:800;color:#f97316;">🔥 ROAST</span>
+        </div>
+        <div style="padding:24px;color:#e5e5e5;font-size:14px;line-height:1.6;">
+          {inner_html}
+        </div>
+      </div>
+    </div>
+    """
+
+
+def format_batch_alert_email(
+    app_name: str,
+    upload_id: int,
+    review_count: int,
+    critical_items: list[tuple[str, int]],
+    regression_items: list[tuple[str, str, float]],
+) -> tuple[str, str]:
+    """HTML counterpart to format_batch_alert -- same content, same
+    critical/regression split, rendered as an email instead of a chat
+    message. Returns (subject, html)."""
+    total = len(critical_items) + len(regression_items)
+    subject = f"🔥 {total} issue{'s' if total != 1 else ''} found in \"{app_name}\""
+
+    rows = ""
+    if regression_items:
+        rows += '<p style="font-weight:700;color:#c084fc;margin:16px 0 8px;">Fix didn\'t hold</p>'
+        for cluster_title, resolved_title, confidence in regression_items:
+            rows += (
+                f'<p style="margin:4px 0;">• "{resolved_title}" was resolved, but '
+                f'"{cluster_title}" matches it at {confidence:.0%} confidence</p>'
+            )
+    if critical_items:
+        rows += '<p style="font-weight:700;color:#f87171;margin:16px 0 8px;">New critical clusters</p>'
+        for cluster_title, item_review_count in critical_items:
+            rows += (
+                f'<p style="margin:4px 0;">• "{cluster_title}" '
+                f"({item_review_count} review{'s' if item_review_count != 1 else ''})</p>"
+            )
+
+    link = upload_link(upload_id)
+    inner = f"""
+      <p style="margin:0 0 12px;">{review_count} review{'s' if review_count != 1 else ''} analyzed.</p>
+      {rows}
+      <a href="{link}" style="display:inline-block;margin-top:20px;padding:10px 20px;background:linear-gradient(90deg,#f97316,#dc2626);color:#fff;text-decoration:none;border-radius:10px;font-weight:600;">View Upload #{upload_id}</a>
+    """
+    return subject, _email_shell(inner)
+
+
+def format_digest_email(app_summaries: list[dict]) -> tuple[str, str]:
+    """
+    Weekly digest -- one email covering every upload from the past 7 days
+    across all the user's apps, not per-upload. app_summaries: list of
+    {app_name, upload_id, review_count, critical_count, resolved_count,
+    regression_count}.
+    """
+    total_reviews = sum(a["review_count"] for a in app_summaries)
+    total_critical = sum(a["critical_count"] for a in app_summaries)
+    subject = f"Your week on Roast — {total_reviews} reviews, {total_critical} critical issues"
+
+    rows = ""
+    for a in app_summaries:
+        link = upload_link(a["upload_id"])
+        rows += f"""
+        <div style="margin:14px 0;padding:14px 16px;background:#0f0f0f;border:1px solid #262626;border-radius:12px;">
+          <a href="{link}" style="color:#fb923c;font-weight:700;text-decoration:none;">{a['app_name']}</a>
+          <p style="margin:6px 0 0;color:#a3a3a3;">
+            {a['review_count']} reviews &middot;
+            <span style="color:#f87171;">{a['critical_count']} critical</span> &middot;
+            <span style="color:#4ade80;">{a['resolved_count']} resolved</span>
+            {f' &middot; <span style="color:#c084fc;">{a["regression_count"]} regressions</span>' if a['regression_count'] else ''}
+          </p>
+        </div>
+        """
+
+    inner = f"""
+      <p style="margin:0 0 16px;">Here's what happened across your apps this week:</p>
+      {rows}
+    """
+    return subject, _email_shell(inner)

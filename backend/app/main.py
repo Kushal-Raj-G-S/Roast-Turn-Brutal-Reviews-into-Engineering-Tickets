@@ -58,11 +58,29 @@ async def lifespan(app: FastAPI):
             logger.info("✅ v2 (new architecture) initialized")
         except Exception as e:
             logger.error(f"⚠️ v2 initialization failed (continuing with v1 only): {e}")
-    
+
+    # Weekly digest email -- one in-process scheduled job, no external cron
+    # or separate worker process needed. Every Monday 09:00 server time.
+    scheduler = None
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        from app.services.weekly_digest import send_weekly_digests
+
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(send_weekly_digests, CronTrigger(day_of_week="mon", hour=9, minute=0))
+        scheduler.start()
+        app.state.scheduler = scheduler
+        logger.info("✅ Weekly digest scheduler started (Mondays 09:00)")
+    except Exception as e:
+        logger.warning(f"⚠️ Weekly digest scheduler failed to start (continuing without it): {e}")
+
     yield
-    
+
     logger.info("🛑 Roast API shutting down...")
     stop_worker()
+    if scheduler:
+        scheduler.shutdown(wait=False)
 
 
 app = FastAPI(
