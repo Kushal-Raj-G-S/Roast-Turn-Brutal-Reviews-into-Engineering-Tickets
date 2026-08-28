@@ -1028,7 +1028,6 @@ async def health_check_db():
             "checked_out": pool.checkedout(),
             "checked_in": pool.checkedin(),
             "overflow": pool.overflow(),
-            "invalid": pool.invalid()
         }
     except Exception as e:
         logger.error(f"Health check error: {e}")

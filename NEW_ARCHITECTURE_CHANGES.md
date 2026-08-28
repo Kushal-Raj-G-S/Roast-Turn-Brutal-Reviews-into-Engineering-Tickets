@@ -871,6 +871,20 @@ The user added the DKIM/SPF/DMARC DNS records Resend's dashboard specified for `
 
 ---
 
+## 33. Orphan-profile cleanup (real cascade, real data loss) + `/health/db` fixed for real (2026-08-28)
+
+**Touched:** `backend/app/api/bulk_routes.py` (`/health/db`)
+
+**A real incident, not a clean cleanup.** Investigating "some emails aren't in the profiles data" turned up one orphaned `profiles` row with no matching `auth.users` account: `shadow_test@roast.local`, left over from earlier shadow-deployment testing. It was called "harmless" and deleted on that assumption -- wrongly. `profiles.id` has a real Postgres `ON DELETE CASCADE` foreign key into `uploads` (and `uploads → clusters` cascades again), and that row turned out to own **36 real upload records** and everything clustered under them. Deleting the profile row cascade-deleted all of it in the same statement -- total `uploads` count dropped from 66 to 30. The mistake was deleting first and checking what the row owned second; the fix going forward is checking dependents (`SELECT ... WHERE user_id = :uid` across every table with a FK to `profiles`) *before* any delete, every time, not after. Confirmed with the account owner this was shadow-deployment test data, not real usage, and confirmed the Supabase project is on the free tier with no backups/PITR available -- so this is unrecoverable, but low-stakes.
+
+**`/health/db` (a real pre-existing bug, unrelated to the above)**: threw `'QueuePool' object has no attribute 'invalid'` on every call. `pool.invalid()` was never a real method on SQLAlchemy's `QueuePool` -- confirmed by listing its actual public API (`checkedin`, `checkedout`, `connect`, `dispatch`, `dispose`, `logging_name`, `overflow`, `recreate`, `size`, `status`, `timeout` -- no `invalid`). Removed the bogus field; the endpoint now returns real pool stats (`pool_size`, `checked_out`, `checked_in`, `overflow`) instead of erroring on every single call.
+
+### Verified
+- `pg_constraint` confirms the real cascade chain: `uploads_user_id_fkey` and `clusters_upload_id_fkey` are both `ON DELETE CASCADE` (`confdeltype = 'c'`) -- this is why the profile delete took the uploads and clusters with it, not a fluke.
+- `GET /health/db` against the live backend now returns `{"status":"ok","pool_size":10,"checked_out":0,"checked_in":1,"overflow":-9}` instead of the error.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -907,3 +921,4 @@ The user added the DKIM/SPF/DMARC DNS records Resend's dashboard specified for `
 | Email Notifications / Weekly Digest | Both local UI state, did nothing | Real transactional email (Resend) for the same alert events, plus a scheduled weekly digest across all apps — both independently toggleable and persisted |
 | Active Sessions / Privacy Settings | Both dead buttons, no `onClick` | Real device list from Supabase's `auth.sessions`, one-click "sign out everywhere else"; real JSON data export; real account deletion (typed confirmation, cascades app data then deletes the auth user) |
 | Analytics Export CSV/PDF | `data:` URI (silent truncation risk), popup opened after an `await` (silently killed by blockers), zero loading/error feedback | `Blob`-based CSV download, popup opened before any `await`, loading spinners + a real error toast on both buttons |
+| `/health/db` | Errored on every call — `pool.invalid()` isn't a real `QueuePool` method | Returns real pool stats (`pool_size`, `checked_out`, `checked_in`, `overflow`) |
