@@ -114,6 +114,8 @@ export default function AnalyticsPage() {
   const [clusterDetails, setClusterDetails] = useState<Map<number, ClusterDetail>>(new Map());
   const [exportCluster, setExportCluster] = useState<NonNullable<AnalyticsData['clusters']>[number] | null>(null);
   const [loadingExportId, setLoadingExportId] = useState<number | null>(null);
+  const [exportingReport, setExportingReport] = useState<"csv" | "pdf" | null>(null);
+  const [reportExportError, setReportExportError] = useState<string | null>(null);
   // Whether the RCA/RAGAS enrichment poll gave up without ever seeing full
   // enrichment land -- distinct from "still polling normally", shown as a
   // softer "taking longer than usual" note instead of an active spinner.
@@ -265,24 +267,27 @@ export default function AnalyticsPage() {
   // ── CSV Export with AI Debug Info ────────────────────────────────────────────
   const exportToCSV = useCallback(async () => {
     if (!analytics) return;
+    setReportExportError(null);
+    setExportingReport("csv");
 
+    try {
     const { user_statistics, severity_distribution, clusters, upload_data } = analytics;
-    
+
     // Fetch full cluster details if needed
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-    
+    if (!session) throw new Error("Your session expired — please refresh and sign in again.");
+
     apiClient.setToken(session.access_token);
-    
+
     // Fetch details for all clusters
-    const clusterDetailsPromises = (clusters || []).map(c => 
+    const clusterDetailsPromises = (clusters || []).map(c =>
       apiClient.getCluster(c.id).catch(() => null)
     );
     const clusterDetailsList = await Promise.all(clusterDetailsPromises);
-    
+
     // Create CSV content
-    let csvContent = "data:text/csv;charset=utf-8,";
-    
+    let csvContent = "";
+
     // Header
     csvContent += `Analytics Report${uploadId ? ` - ${upload_data?.filename || `Upload #${uploadId}`}` : ''}\n`;
     csvContent += `Generated: ${new Date().toLocaleString()}\n\n`;
@@ -325,38 +330,55 @@ export default function AnalyticsPage() {
       });
     }
     
-    // Download
-    const encodedUri = encodeURI(csvContent);
+    // Download via Blob — a data: URI silently truncates past a few MB in
+    // some browsers, which a report with many clusters + sample reviews can hit.
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8" });
+    const blobUrl = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `analytics-report-${uploadId || 'all'}-${Date.now()}.csv`);
+    link.href = blobUrl;
+    link.download = `analytics-report-${uploadId || 'all'}-${Date.now()}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      setReportExportError(err instanceof Error ? err.message : "Couldn't export CSV. Please try again.");
+    } finally {
+      setExportingReport(null);
+    }
   }, [analytics, uploadId]);
 
   // ── PDF Export with AI Debug Info ────────────────────────────────────────────
   const exportToPDF = useCallback(async () => {
     if (!analytics) return;
+    setReportExportError(null);
+    setExportingReport("pdf");
 
+    // Open the window synchronously (before any await) so it isn't caught by
+    // popup blockers, which only allow-list windows opened directly from a
+    // click handler — opening it after the awaited fetches below gets
+    // blocked silently, which is exactly what was happening before this fix.
+    const printWindow = window.open('', '_blank');
+
+    try {
     const { user_statistics, severity_distribution, clusters, upload_data } = analytics;
-    
+
+    if (!printWindow) {
+      throw new Error("Your browser blocked the report popup — allow popups for this site and try again.");
+    }
+
     // Fetch full cluster details if needed
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session) return;
-    
+    if (!session) throw new Error("Your session expired — please refresh and sign in again.");
+
     apiClient.setToken(session.access_token);
-    
+
     // Fetch details for all clusters
-    const clusterDetailsPromises = (clusters || []).map(c => 
+    const clusterDetailsPromises = (clusters || []).map(c =>
       apiClient.getCluster(c.id).catch(() => null)
     );
     const clusterDetailsList = await Promise.all(clusterDetailsPromises);
-    
-    // Create a printable HTML page
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) return;
-    
+
     const html = `
 <!DOCTYPE html>
 <html>
@@ -556,6 +578,12 @@ export default function AnalyticsPage() {
     
     printWindow.document.write(html);
     printWindow.document.close();
+    } catch (err) {
+      printWindow?.close();
+      setReportExportError(err instanceof Error ? err.message : "Couldn't export PDF. Please try again.");
+    } finally {
+      setExportingReport(null);
+    }
   }, [analytics, uploadId]);
 
   useEffect(() => {
@@ -850,24 +878,32 @@ export default function AnalyticsPage() {
             {/* Export Buttons */}
             <motion.button
               onClick={exportToCSV}
-              disabled={!analytics}
+              disabled={!analytics || exportingReport !== null}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500/20 to-green-500/20 border border-emerald-500/30 hover:border-emerald-500/50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
               whileHover={{ scale: analytics ? 1.02 : 1 }}
               whileTap={{ scale: analytics ? 0.98 : 1 }}
             >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-400 group-hover:text-emerald-300 transition-colors" />
-              <span className="text-sm font-semibold text-white">Export CSV</span>
+              {exportingReport === "csv" ? (
+                <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400 group-hover:text-emerald-300 transition-colors" />
+              )}
+              <span className="text-sm font-semibold text-white">{exportingReport === "csv" ? "Exporting…" : "Export CSV"}</span>
             </motion.button>
 
             <motion.button
               onClick={exportToPDF}
-              disabled={!analytics}
+              disabled={!analytics || exportingReport !== null}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-500/20 to-indigo-500/20 border border-blue-500/30 hover:border-blue-500/50 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
               whileHover={{ scale: analytics ? 1.02 : 1 }}
               whileTap={{ scale: analytics ? 0.98 : 1 }}
             >
-              <Download className="w-4 h-4 text-blue-400 group-hover:text-blue-300 transition-colors" />
-              <span className="text-sm font-semibold text-white">Export PDF</span>
+              {exportingReport === "pdf" ? (
+                <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4 text-blue-400 group-hover:text-blue-300 transition-colors" />
+              )}
+              <span className="text-sm font-semibold text-white">{exportingReport === "pdf" ? "Exporting…" : "Export PDF"}</span>
             </motion.button>
 
             {/* AI Debug Center Button */}
@@ -1822,6 +1858,27 @@ export default function AnalyticsPage() {
           onClose={() => setExportCluster(null)}
         />
       )}
+
+      {/* ── Report export error toast ── */}
+      <AnimatePresence>
+        {reportExportError && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/30 backdrop-blur-xl shadow-lg max-w-md"
+          >
+            <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+            <span className="text-sm text-red-200">{reportExportError}</span>
+            <button
+              onClick={() => setReportExportError(null)}
+              className="ml-1 text-red-300/70 hover:text-red-200 transition-colors"
+            >
+              ✕
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

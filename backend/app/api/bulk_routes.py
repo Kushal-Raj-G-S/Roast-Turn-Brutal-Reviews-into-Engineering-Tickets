@@ -13,14 +13,18 @@ from datetime import datetime, timezone
 import numpy as np
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, Depends, BackgroundTasks
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from sqlmodel import Session, select, func
+from sqlalchemy import text
+import jwt as pyjwt
 
 from app.models.bulk_models import Upload, Cluster, PushSubscription
 from app.models.usage_models import get_monthly_usage, increment_upload_count
 from app.core.config import config
 from app.core.plans import get_limits, uploads_unlimited, reviews_unlimited
-from app.database.auth_supabase import get_current_user
+from app.database.auth_supabase import get_current_user, security
+from app.database.supabase_client import supabase_admin
 from app.models.models_supabase import Profile
 from app.core.shadow_deployment import schedule_shadow_deployment
 
@@ -1265,3 +1269,182 @@ async def test_push(
     if sent == 0:
         raise HTTPException(status_code=502, detail="Push failed to send to every subscribed device")
     return {"status": "sent", "devices": sent}
+
+
+# ---------------------------------------------------------------------------
+# Account: active sessions + privacy (export / delete)
+# ---------------------------------------------------------------------------
+
+def _decode_session_id(token: str) -> Optional[str]:
+    """
+    Pull the `session_id` claim out of the access token to mark which
+    auth.sessions row is "this device" in the list below. Decoded without
+    signature verification -- the token already passed a real verification
+    in get_current_user() (supabase.auth.get_user()) a few lines earlier in
+    the same request, so this is just reading a claim out of an already-
+    trusted token, not an auth check of its own.
+    """
+    try:
+        payload = pyjwt.decode(token, options={"verify_signature": False})
+        return payload.get("session_id")
+    except Exception:
+        return None
+
+
+class SessionInfo(BaseModel):
+    id: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    not_after: Optional[str] = None
+    user_agent: Optional[str] = None
+    ip: Optional[str] = None
+    is_current: bool = False
+
+
+@router.get("/account/sessions", response_model=list[SessionInfo])
+async def list_active_sessions(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    user: Profile = Depends(get_current_user),
+):
+    """
+    Real logged-in devices/browsers for this account, straight from
+    Supabase's own auth.sessions table (not exposed by the auth REST API,
+    so this goes directly over the same Postgres connection the rest of
+    the backend already uses).
+    """
+    from app.api.bulk_api import get_engine_instance
+
+    engine = get_engine_instance()
+    if not engine:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+
+    current_session_id = _decode_session_id(credentials.credentials)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT id, created_at, updated_at, not_after, user_agent, ip::text "
+                "FROM auth.sessions WHERE user_id = :uid ORDER BY created_at DESC"
+            ),
+            {"uid": str(user.id)},
+        ).fetchall()
+
+    return [
+        SessionInfo(
+            id=str(r[0]),
+            created_at=r[1].isoformat() if r[1] else None,
+            updated_at=r[2].isoformat() if r[2] else None,
+            not_after=r[3].isoformat() if r[3] else None,
+            user_agent=r[4],
+            ip=r[5],
+            is_current=(str(r[0]) == current_session_id),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/account/export")
+async def export_account_data(
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    """
+    Everything Roast holds on this account, as one JSON document -- profile,
+    every upload, and every issue/cluster detected in it (RCA, affected
+    versions/devices, keywords). Raw review text isn't stored per-row in the
+    optimized pipeline (see Review model docstring), so cluster-level detail
+    plus each cluster's own sample_reviews is the real full export, not an
+    abridged one.
+    """
+    uploads = session.exec(select(Upload).where(Upload.user_id == user.id)).all()
+    upload_ids = [u.id for u in uploads]
+
+    clusters = (
+        session.exec(select(Cluster).where(Cluster.upload_id.in_(upload_ids))).all()
+        if upload_ids else []
+    )
+    clusters_by_upload: dict = {}
+    for c in clusters:
+        clusters_by_upload.setdefault(c.upload_id, []).append({
+            "title": c.title,
+            "severity": c.severity,
+            "status": c.status,
+            "review_count": c.review_count,
+            "rca_hypothesis": c.rca_hypothesis,
+            "rca_fix": c.rca_fix,
+            "affected_versions": c.affected_versions,
+            "affected_devices": c.affected_devices,
+            "keywords": c.keywords,
+            "sample_reviews": c.sample_reviews,
+            "regression_detected": bool(c.regression_detected),
+            "regression_of_title": c.regression_of_title,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "resolved_at": c.resolved_at.isoformat() if c.resolved_at else None,
+        })
+
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "account": {
+            "id": str(user.id),
+            "email": user.email,
+            "full_name": user.full_name,
+            "plan": user.plan,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        },
+        "uploads": [
+            {
+                "id": u.id,
+                "filename": u.filename,
+                "status": u.status,
+                "total_reviews": u.total_reviews,
+                "clusters_created": u.clusters_created,
+                "created_at": u.created_at.isoformat() if u.created_at else None,
+                "completed_at": u.completed_at.isoformat() if u.completed_at else None,
+                "issues": clusters_by_upload.get(u.id, []),
+            }
+            for u in uploads
+        ],
+    }
+
+
+@router.delete("/account")
+async def delete_account(
+    session: Session = Depends(get_db_session),
+    user: Profile = Depends(get_current_user),
+):
+    """
+    Permanently delete this account and everything under it -- uploads,
+    clusters, push subscriptions, the profile row, and the underlying
+    Supabase auth user. Irreversible; the frontend is responsible for a real
+    confirmation step (typed phrase, re-auth) before ever calling this --
+    this endpoint trusts that a valid bearer token alone means "go".
+    """
+    if not supabase_admin:
+        raise HTTPException(status_code=503, detail="Account deletion is not configured on this server")
+
+    uid = str(user.id)
+    upload_ids = [u.id for u in session.exec(select(Upload).where(Upload.user_id == user.id)).all()]
+
+    conn = session.connection()
+    conn.execute(text("DELETE FROM push_subscriptions WHERE user_id = :uid"), {"uid": uid})
+    if upload_ids:
+        conn.execute(text("DELETE FROM severity_explanations WHERE upload_id = ANY(:ids)"), {"ids": upload_ids})
+        conn.execute(text("DELETE FROM clusters WHERE upload_id = ANY(:ids)"), {"ids": upload_ids})
+    conn.execute(text("DELETE FROM uploads WHERE user_id = :uid"), {"uid": uid})
+    conn.execute(text("DELETE FROM profiles WHERE id = :uid"), {"uid": uid})
+    session.commit()
+
+    try:
+        supabase_admin.auth.admin.delete_user(uid)
+    except Exception as e:
+        # The app-side data is already gone at this point -- surface the
+        # auth-user leftover rather than pretending nothing happened, since
+        # it means the person could theoretically still log in to an
+        # account with no data behind it.
+        logger.error(f"Deleted app data for {uid} but auth user deletion failed: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Your data was deleted, but we couldn't remove your login itself — contact support to finish this.",
+        )
+
+    return {"status": "deleted"}

@@ -10,6 +10,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { User, Bell, Shield, Moon, Sun, Mail, Lock, Globe, Zap, ChevronRight, Webhook, Check, Loader2, ShieldCheck, ShieldOff, Copy, X, AlertCircle, Send } from "lucide-react";
 import { SpotlightCard } from "@/components/ui";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 import { apiClient } from "@/lib/api-client";
 import { isPushSupported, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from "@/lib/push";
@@ -20,7 +21,37 @@ interface MfaFactor {
   status: string;
 }
 
+interface ActiveSession {
+  id: string;
+  created_at: string | null;
+  updated_at: string | null;
+  not_after: string | null;
+  user_agent: string | null;
+  ip: string | null;
+  is_current: boolean;
+}
+
+/** Rough, best-effort "Chrome on Windows" from a raw User-Agent string --
+ * good enough for a device list, not meant to be a real UA parser. */
+function describeUserAgent(ua: string | null): string {
+  if (!ua) return "Unknown device";
+  const isMobile = /Mobile|Android|iPhone/i.test(ua);
+  let browser = "Unknown browser";
+  if (/Edg\//.test(ua)) browser = "Edge";
+  else if (/Chrome\//.test(ua)) browser = "Chrome";
+  else if (/Firefox\//.test(ua)) browser = "Firefox";
+  else if (/Safari\//.test(ua)) browser = "Safari";
+  let os = "Unknown OS";
+  if (/Windows/.test(ua)) os = "Windows";
+  else if (/Mac OS X/.test(ua)) os = "macOS";
+  else if (/Android/.test(ua)) os = "Android";
+  else if (/iPhone|iPad/.test(ua)) os = "iOS";
+  else if (/Linux/.test(ua)) os = "Linux";
+  return `${browser} on ${os}${isMobile ? " (mobile)" : ""}`;
+}
+
 export default function SettingsPage() {
+  const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   // Email notifications + weekly digest -- real, persisted via the same
@@ -72,6 +103,24 @@ export default function SettingsPage() {
   const [mfaError, setMfaError] = useState<string | null>(null);
 
   const verifiedFactor = mfaFactors.find((f) => f.status === "verified");
+
+  // Active sessions -- real rows from Supabase's own auth.sessions table
+  // (GET /account/sessions), not a mocked device list.
+  const [showSessions, setShowSessions] = useState(false);
+  const [sessions, setSessions] = useState<ActiveSession[]>([]);
+  const [sessionsStatus, setSessionsStatus] = useState<"idle" | "loading" | "revoking" | "error">("idle");
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+
+  // Privacy -- real data export (GET /account/export) and real account
+  // deletion (DELETE /account), gated behind a typed confirmation since
+  // there's no undo once it runs.
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [exportStatus, setExportStatus] = useState<"idle" | "exporting" | "error">("idle");
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleteStatus, setDeleteStatus] = useState<"idle" | "deleting" | "error">("idle");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const loadMfaFactors = async () => {
     const { data, error } = await supabase.auth.mfa.listFactors();
@@ -369,6 +418,79 @@ export default function SettingsPage() {
     } catch (e: any) {
       setPushStatus("error");
       setPushError(e.message || "Test push failed");
+    }
+  };
+
+  const loadSessions = async () => {
+    setSessionsStatus("loading");
+    setSessionsError(null);
+    try {
+      await ensureFreshToken();
+      const list = await apiClient.getActiveSessions();
+      setSessions(list);
+      setSessionsStatus("idle");
+    } catch (e: any) {
+      setSessionsStatus("error");
+      setSessionsError(e.message || "Failed to load active sessions");
+    }
+  };
+
+  const toggleSessions = () => {
+    const next = !showSessions;
+    setShowSessions(next);
+    if (next && sessions.length === 0) loadSessions();
+  };
+
+  const revokeOtherSessions = async () => {
+    if (!window.confirm("Sign out every other device? This device stays signed in.")) return;
+    setSessionsStatus("revoking");
+    setSessionsError(null);
+    try {
+      const { error } = await supabase.auth.signOut({ scope: "others" });
+      if (error) throw error;
+      await loadSessions();
+    } catch (e: any) {
+      setSessionsStatus("error");
+      setSessionsError(e.message || "Failed to sign out other devices");
+    }
+  };
+
+  const togglePrivacy = () => setShowPrivacy((v) => !v);
+
+  const exportData = async () => {
+    setExportStatus("exporting");
+    setExportError(null);
+    try {
+      await ensureFreshToken();
+      const data = await apiClient.exportAccountData();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `roast-data-export-${Date.now()}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setExportStatus("idle");
+    } catch (e: any) {
+      setExportStatus("error");
+      setExportError(e.message || "Failed to export your data");
+    }
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (deleteConfirmText !== "DELETE") return;
+    setDeleteStatus("deleting");
+    setDeleteError(null);
+    try {
+      await ensureFreshToken();
+      await apiClient.deleteAccount();
+      await supabase.auth.signOut();
+      router.push("/login");
+    } catch (e: any) {
+      setDeleteStatus("error");
+      setDeleteError(e.message || "Failed to delete your account");
     }
   };
 
@@ -910,27 +1032,161 @@ export default function SettingsPage() {
                 </AnimatePresence>
               </div>
 
-              <button className="w-full flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 transition-colors">
-                <div className="flex items-center gap-3">
-                  <Shield className="w-4 h-4" />
-                  <div className="text-left">
-                    <p className="text-sm text-white">Active Sessions</p>
-                    <p className="text-xs text-neutral-500">Manage logged-in devices</p>
+              <div>
+                <button
+                  onClick={toggleSessions}
+                  className="w-full flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <Shield className="w-4 h-4" />
+                    <div className="text-left">
+                      <p className="text-sm text-white">Active Sessions</p>
+                      <p className="text-xs text-neutral-500">Manage logged-in devices</p>
+                    </div>
                   </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-neutral-500" />
-              </button>
+                  <ChevronRight className={`w-4 h-4 text-neutral-500 transition-transform ${showSessions ? "rotate-90" : ""}`} />
+                </button>
 
-              <button className="w-full flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 transition-colors">
-                <div className="flex items-center gap-3">
-                  <Lock className="w-4 h-4" />
-                  <div className="text-left">
-                    <p className="text-sm text-white">Privacy Settings</p>
-                    <p className="text-xs text-neutral-500">Control your data</p>
+                <AnimatePresence>
+                  {showSessions && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mt-2 p-3 rounded-xl bg-white/5 border border-white/10 space-y-2">
+                        {sessionsStatus === "loading" ? (
+                          <div className="flex items-center gap-2 text-sm text-neutral-400 py-2">
+                            <Loader2 className="w-4 h-4 animate-spin" /> Loading sessions…
+                          </div>
+                        ) : sessionsError ? (
+                          <div className="flex items-center gap-2 text-sm text-red-400 py-2">
+                            <AlertCircle className="w-4 h-4" /> {sessionsError}
+                          </div>
+                        ) : sessions.length === 0 ? (
+                          <p className="text-sm text-neutral-500 py-2">No active sessions found.</p>
+                        ) : (
+                          sessions.map((s) => (
+                            <div key={s.id} className="flex items-center justify-between p-2.5 rounded-lg bg-black/20 border border-white/5">
+                              <div>
+                                <p className="text-sm text-white flex items-center gap-2">
+                                  {describeUserAgent(s.user_agent)}
+                                  {s.is_current && (
+                                    <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">This device</span>
+                                  )}
+                                </p>
+                                <p className="text-xs text-neutral-500">
+                                  {s.ip ? `${s.ip} · ` : ""}
+                                  Signed in {s.created_at ? new Date(s.created_at).toLocaleString() : "unknown time"}
+                                </p>
+                              </div>
+                            </div>
+                          ))
+                        )}
+
+                        {sessions.some((s) => !s.is_current) && (
+                          <button
+                            onClick={revokeOtherSessions}
+                            disabled={sessionsStatus === "revoking"}
+                            className="w-full mt-1 flex items-center justify-center gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors text-sm font-medium disabled:opacity-50"
+                          >
+                            {sessionsStatus === "revoking" ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldOff className="w-4 h-4" />}
+                            Sign out all other devices
+                          </button>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              <div>
+                <button
+                  onClick={togglePrivacy}
+                  className="w-full flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <Lock className="w-4 h-4" />
+                    <div className="text-left">
+                      <p className="text-sm text-white">Privacy Settings</p>
+                      <p className="text-xs text-neutral-500">Control your data</p>
+                    </div>
                   </div>
-                </div>
-                <ChevronRight className="w-4 h-4 text-neutral-500" />
-              </button>
+                  <ChevronRight className={`w-4 h-4 text-neutral-500 transition-transform ${showPrivacy ? "rotate-90" : ""}`} />
+                </button>
+
+                <AnimatePresence>
+                  {showPrivacy && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mt-2 p-3 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                        <div>
+                          <button
+                            onClick={exportData}
+                            disabled={exportStatus === "exporting"}
+                            className="w-full flex items-center justify-center gap-2 p-2.5 rounded-lg bg-white/5 border border-white/10 text-white hover:bg-white/10 transition-colors text-sm font-medium disabled:opacity-50"
+                          >
+                            {exportStatus === "exporting" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                            Export my data (JSON)
+                          </button>
+                          {exportStatus === "error" && (
+                            <p className="text-xs text-red-400 mt-1.5 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5" /> {exportError}</p>
+                          )}
+                        </div>
+
+                        <div className="pt-2 border-t border-white/10">
+                          {!showDeleteConfirm ? (
+                            <button
+                              onClick={() => setShowDeleteConfirm(true)}
+                              className="w-full flex items-center justify-center gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition-colors text-sm font-medium"
+                            >
+                              Delete my account
+                            </button>
+                          ) : (
+                            <div className="space-y-2">
+                              <p className="text-xs text-red-300">
+                                This permanently deletes your account, uploads, and issues. This cannot be undone.
+                                Type <span className="font-mono font-bold">DELETE</span> to confirm.
+                              </p>
+                              <input
+                                type="text"
+                                value={deleteConfirmText}
+                                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                                placeholder="DELETE"
+                                className="w-full p-2.5 rounded-lg bg-black/30 border border-red-500/30 text-white text-sm font-mono focus:outline-none focus:border-red-500/60"
+                              />
+                              {deleteError && (
+                                <p className="text-xs text-red-400 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5" /> {deleteError}</p>
+                              )}
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={confirmDeleteAccount}
+                                  disabled={deleteConfirmText !== "DELETE" || deleteStatus === "deleting"}
+                                  className="flex-1 flex items-center justify-center gap-2 p-2.5 rounded-lg bg-red-600 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-red-700 transition-colors"
+                                >
+                                  {deleteStatus === "deleting" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                                  Permanently delete
+                                </button>
+                                <button
+                                  onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText(""); setDeleteError(null); }}
+                                  className="p-2.5 rounded-lg bg-white/5 border border-white/10 text-neutral-400 hover:text-white"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
           </SpotlightCard>
         </motion.div>

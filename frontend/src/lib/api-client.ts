@@ -488,6 +488,43 @@ class APIClient {
     return response.json();
   }
 
+  // ── Account: active sessions + privacy (export / delete) ────────────
+  async getActiveSessions(): Promise<Array<{
+    id: string;
+    created_at: string | null;
+    updated_at: string | null;
+    not_after: string | null;
+    user_agent: string | null;
+    ip: string | null;
+    is_current: boolean;
+  }>> {
+    const response = await fetch(`${this.baseURL}/account/sessions`, {
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) throw new Error('Failed to load active sessions');
+    return response.json();
+  }
+
+  async exportAccountData(): Promise<unknown> {
+    const response = await fetch(`${this.baseURL}/account/export`, {
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) throw new Error('Failed to export account data');
+    return response.json();
+  }
+
+  async deleteAccount(): Promise<{ status: string }> {
+    const response = await fetch(`${this.baseURL}/account`, {
+      method: 'DELETE',
+      headers: this.getHeaders(true),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || 'Account deletion failed');
+    }
+    return response.json();
+  }
+
   // ── Fix verification / triage / cross-platform ──────────────────────
   async getTriageQueue(uploadId: number): Promise<{ upload_id: number; clusters: any[] }> {
     const response = await fetch(`${this.baseURL}/uploads/${uploadId}/triage-queue`, {

@@ -848,6 +848,29 @@ The user added the DKIM/SPF/DMARC DNS records Resend's dashboard specified for `
 
 ---
 
+## 32. Real Active Sessions + Privacy (export / delete), and export CSV/PDF hardening (2026-08-28)
+
+**Touched:** `backend/app/api/bulk_routes.py` (new `/account/sessions`, `/account/export`, `DELETE /account`), `frontend/src/lib/api-client.ts`, `frontend/src/app/(app)/settings/page.tsx`, `frontend/src/app/(app)/analytics/page.tsx`
+
+**Active Sessions** (was a dead button with no `onClick`) now lists this account's real logged-in devices, straight from Supabase's own `auth.sessions` table -- not exposed by the auth REST API, so `GET /account/sessions` reads it directly over the same Postgres connection the rest of the backend already uses. Each row is decoded from the real `user_agent`/`ip`/`created_at` columns; "this device" is identified by decoding the `session_id` claim out of the request's own already-verified access token (no separate lookup needed). "Sign out all other devices" calls Supabase's own `signOut({ scope: "others" })` client-side -- built for exactly this, no backend endpoint needed for the revoke itself.
+
+**Privacy Settings** (also a dead button) now has two real actions:
+- **Export my data** -- `GET /account/export` returns the account profile plus every upload and every cluster/issue detected in it (RCA, affected versions/devices, keywords, sample reviews) as one JSON document, downloaded client-side via a `Blob`.
+- **Delete my account** -- `DELETE /account` deletes push subscriptions, clusters, severity explanations, uploads, and the profile row (raw SQL in explicit FK order, since the SQLModel and SQLAlchemy model classes mapping to these same tables don't share ORM-level cascades), then calls `supabase_admin.auth.admin.delete_user()` to remove the underlying Supabase auth user itself. Irreversible, so the frontend gates it behind typing `DELETE` before the button even enables -- the endpoint itself just trusts a valid bearer token, same as every other settings route.
+
+**A real, separate bug fix along the way**: Analytics' Export CSV/PDF buttons (never touched since they were first built) had three real problems, not just polish --
+1. No loading state at all: fetching every cluster's full detail before building the report could take several seconds on a large upload, and the button gave zero feedback in the meantime.
+2. CSV built a `data:` URI, which silently truncates past a few MB in some browsers -- a report with many clusters and long sample-review text could hit that ceiling. Switched to `Blob` + `URL.createObjectURL`, which has no such limit.
+3. PDF opened `window.open()` *after* an `await`, which popup blockers kill silently (blockers only allow-list windows opened synchronously from the click handler) -- the export just did nothing with no error. Moved the `window.open()` before any `await`, and surfaced a real error toast if it's still blocked.
+
+### Verified
+- Confirmed via `/openapi.json` that all three new routes (`/account/sessions`, `/account/export`, `DELETE /account`) registered correctly with the running backend.
+- Confirmed `auth.sessions` has real `user_agent`/`ip` columns and is reachable from the backend's existing DB connection (`SELECT count(*) FROM auth.sessions` succeeded against the live database).
+- Confirmed `supabase_admin.auth.admin.delete_user(id: str)`'s real signature in the installed `supabase_auth` package matches the call made here.
+- Both `frontend/src/app/(app)/settings/page.tsx` and `frontend/src/app/(app)/analytics/page.tsx` compiled cleanly (`200`, no server-side errors) after the changes.
+
+---
+
 ## Summary — old vs. new, in one table
 
 | Concern | Old | New |
@@ -882,3 +905,5 @@ The user added the DKIM/SPF/DMARC DNS records Resend's dashboard specified for `
 | Protected-route coverage | Only `/dashboard`, `/settings`, `/api/roast` gated server-side | All of `(app)` (`/analytics`, `/upload`, `/clusters`, `/ai-debug` too) gated server-side, closing a real client-only-redirect gap |
 | Push Notifications toggle | Local UI state, did nothing | Real Web Push (self-hosted VAPID) — subscribes the real browser, fires on the same events as Discord/Slack alerts |
 | Email Notifications / Weekly Digest | Both local UI state, did nothing | Real transactional email (Resend) for the same alert events, plus a scheduled weekly digest across all apps — both independently toggleable and persisted |
+| Active Sessions / Privacy Settings | Both dead buttons, no `onClick` | Real device list from Supabase's `auth.sessions`, one-click "sign out everywhere else"; real JSON data export; real account deletion (typed confirmation, cascades app data then deletes the auth user) |
+| Analytics Export CSV/PDF | `data:` URI (silent truncation risk), popup opened after an `await` (silently killed by blockers), zero loading/error feedback | `Blob`-based CSV download, popup opened before any `await`, loading spinners + a real error toast on both buttons |
