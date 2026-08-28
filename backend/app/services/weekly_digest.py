@@ -54,13 +54,24 @@ async def send_weekly_digests() -> None:
                     clusters = session.exec(
                         select(Cluster).where(Cluster.upload_id == upload.id)
                     ).all()
+                    critical_clusters = [c for c in clusters if (c.severity or "").lower() == "critical"]
+                    regression_clusters = [c for c in clusters if c.regression_detected and c.regression_of_title]
+                    # Highest review volume first -- that's "worth naming",
+                    # not creation order or id.
+                    critical_clusters.sort(key=lambda c: c.review_count or 0, reverse=True)
+
                     app_summaries.append({
                         "app_name": (upload.filename or f"Upload #{upload.id}").rsplit(".", 1)[0],
                         "upload_id": upload.id,
                         "review_count": upload.total_reviews or 0,
-                        "critical_count": sum(1 for c in clusters if (c.severity or "").lower() == "critical"),
+                        "critical_count": len(critical_clusters),
                         "resolved_count": sum(1 for c in clusters if c.status == "resolved"),
-                        "regression_count": sum(1 for c in clusters if c.regression_detected),
+                        "regression_count": len(regression_clusters),
+                        "top_critical": [(c.title, c.review_count or 0) for c in critical_clusters[:3]],
+                        "top_regressions": [
+                            (c.title, c.regression_of_title, c.regression_confidence or 0.5)
+                            for c in regression_clusters[:3]
+                        ],
                     })
 
                 subject, html = notifications.format_digest_email(app_summaries)

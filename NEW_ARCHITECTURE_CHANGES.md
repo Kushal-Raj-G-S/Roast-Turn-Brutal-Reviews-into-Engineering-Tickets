@@ -826,8 +826,25 @@ Resend's free/unverified tier will only deliver to **the email address the Resen
 - Manually triggered `send_weekly_digests()` directly against the real database: found all 3 profiles with uploads in the last 7 days, attempted a send for each independently, and confirmed one user's failure didn't stop the others from being attempted -- the per-user isolation works correctly, even though every send failed for the same Resend sandbox reason above.
 - Restarted the backend and confirmed the scheduler registers and starts cleanly (`Added job "send_weekly_digests"` / `Scheduler started` in the real startup log).
 
-### Not done here
+### Not done here (at the time)
 Verifying a real domain with Resend (so email actually reaches real users, not just the developer's own inbox) is a DNS-level action outside what code can fix -- flagged clearly to the user as the next real step if this needs to work beyond testing.
+
+---
+
+## 31. `roast.systems` verified with Resend; weekly digest was real but genuinely uninformative (2026-08-28)
+
+**Touched:** `backend/app/services/notifications.py` (`format_digest_email`), `backend/app/services/weekly_digest.py`, `backend/.env` (`RESEND_FROM_EMAIL`, not committed — gitignored)
+
+The user added the DKIM/SPF/DMARC DNS records Resend's dashboard specified for `roast.systems` at their registrar. Confirmed via direct `nslookup` that all three had already propagated correctly before Resend's own dashboard showed it, then confirmed Resend's dashboard itself showed DKIM and SPF as `Verified`. Switched `RESEND_FROM_EMAIL` from the shared `onboarding@resend.dev` sandbox address to `Roast <alerts@roast.systems>` and re-sent a real email to the actual demo account's address (`kushalrajgs@gmail.com`, not the Resend-signup address) -- it delivered, `200` with a real message id, closing out §30's "not done here" item for real multi-recipient delivery.
+
+**A real, separate finding along the way**: the first real weekly-digest send landed in Spam, not the inbox -- expected and flagged as normal for a domain's very first sends while it builds sender reputation with Gmail, not a bug in the send path (the batch-alert test email sent moments earlier from the same address landed instantly, which happens; reputation-based filtering isn't fully deterministic per-message).
+
+**A real content problem, caught only by actually reading the delivered email**: once found in Spam, the digest itself was genuinely uninformative -- just per-app counts ("5 critical, 0 resolved"), no indication of *what* those 5 critical issues actually were. `format_digest_email` never included cluster titles at all; `weekly_digest.py` only ever computed counts, never collected the underlying `Cluster` rows' titles. Fixed both: `weekly_digest.py` now sorts each app's critical clusters by review volume and passes the top 3 titles (plus a "+N more" overflow) and any regression titles through to the template, which itemizes them as a real bulleted worklist -- the same "name the actual issue" pattern §26's batch alert already used, just missing from the digest until this pass actually read what it was sending.
+
+### Verified
+- `nslookup` confirmed DKIM/SPF/DMARC records live before Resend's dashboard caught up.
+- Real send to the actual demo account's real address (not the Resend-signup address) succeeded post-verification -- proves domain verification, not just the sandbox restriction, is what changed.
+- Re-sent the corrected digest against the real database (10 real uploads, real cluster titles) and confirmed the rendered HTML now contains actual issue titles per app (e.g. `"[CRITICAL] Issue: Too much AI and had I.C.E. ads..."`, `"[CRITICAL] App crashes"`) with review counts and an overflow line, not just bare numbers.
 
 ---
 

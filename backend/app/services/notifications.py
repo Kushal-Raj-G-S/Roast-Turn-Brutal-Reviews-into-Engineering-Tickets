@@ -262,9 +262,19 @@ def format_batch_alert_email(
 def format_digest_email(app_summaries: list[dict]) -> tuple[str, str]:
     """
     Weekly digest -- one email covering every upload from the past 7 days
-    across all the user's apps, not per-upload. app_summaries: list of
-    {app_name, upload_id, review_count, critical_count, resolved_count,
-    regression_count}.
+    across all the user's apps, not per-upload.
+
+    app_summaries: list of {
+      app_name, upload_id, review_count, critical_count, resolved_count,
+      regression_count,
+      top_critical: [(title, review_count), ...]      -- up to 3, highest volume first
+      top_regressions: [(title, resolved_title, confidence), ...]  -- up to 3
+    }
+
+    Counts alone ("5 critical, 0 resolved") don't tell you anything you can
+    act on -- this itemizes the actual highest-volume critical clusters and
+    any regressions by name, the same way the per-upload batch alert does,
+    so the digest is a worklist, not a scoreboard.
     """
     total_reviews = sum(a["review_count"] for a in app_summaries)
     total_critical = sum(a["critical_count"] for a in app_summaries)
@@ -273,15 +283,36 @@ def format_digest_email(app_summaries: list[dict]) -> tuple[str, str]:
     rows = ""
     for a in app_summaries:
         link = upload_link(a["upload_id"])
+
+        items = ""
+        for title, review_count in a.get("top_critical", []):
+            items += (
+                f'<p style="margin:4px 0 4px 4px;color:#e5e5e5;">'
+                f'<span style="color:#f87171;">&#9679;</span> "{title}" '
+                f'<span style="color:#737373;">({review_count} review{"s" if review_count != 1 else ""})</span></p>'
+            )
+        for title, resolved_title, confidence in a.get("top_regressions", []):
+            items += (
+                f'<p style="margin:4px 0 4px 4px;color:#e5e5e5;">'
+                f'<span style="color:#c084fc;">&#9679;</span> "{resolved_title}" resurfaced as '
+                f'"{title}" <span style="color:#737373;">({confidence:.0%} match)</span></p>'
+            )
+        remaining_critical = max(a["critical_count"] - len(a.get("top_critical", [])), 0)
+        if remaining_critical:
+            items += f'<p style="margin:4px 0 4px 4px;color:#737373;">+ {remaining_critical} more critical issue{"s" if remaining_critical != 1 else ""}</p>'
+        if not items:
+            items = '<p style="margin:4px 0 4px 4px;color:#737373;">No critical issues or regressions this week.</p>'
+
         rows += f"""
         <div style="margin:14px 0;padding:14px 16px;background:#0f0f0f;border:1px solid #262626;border-radius:12px;">
           <a href="{link}" style="color:#fb923c;font-weight:700;text-decoration:none;">{a['app_name']}</a>
-          <p style="margin:6px 0 0;color:#a3a3a3;">
+          <p style="margin:6px 0 10px;color:#a3a3a3;">
             {a['review_count']} reviews &middot;
             <span style="color:#f87171;">{a['critical_count']} critical</span> &middot;
             <span style="color:#4ade80;">{a['resolved_count']} resolved</span>
             {f' &middot; <span style="color:#c084fc;">{a["regression_count"]} regressions</span>' if a['regression_count'] else ''}
           </p>
+          {items}
         </div>
         """
 
