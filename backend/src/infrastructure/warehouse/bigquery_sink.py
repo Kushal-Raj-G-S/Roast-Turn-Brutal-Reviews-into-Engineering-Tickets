@@ -30,6 +30,7 @@ Requires: pip install google-cloud-bigquery
 
 import hashlib
 import logging
+import os
 import re
 from datetime import datetime
 from typing import List, Optional
@@ -165,7 +166,27 @@ class BigQueryWarehouseSink:
     def _get_client(self):
         if self._client is None:
             from google.cloud import bigquery
-            self._client = bigquery.Client(project=self.project_id)
+
+            # BIGQUERY_EMULATOR_HOST is unset in every real deployment, so
+            # this changes nothing about the ADC-authenticated path against
+            # real GCP. It exists because the client has no built-in
+            # emulator awareness (unlike google-cloud-storage's
+            # STORAGE_EMULATOR_HOST) — without this, the only way to point
+            # this class at a local/CI emulator was to not use this class
+            # at all, which is exactly what happened: every prior emulator
+            # test built its own throwaway bigquery.Client and never
+            # exercised this sink.
+            emulator_host = os.getenv("BIGQUERY_EMULATOR_HOST")
+            if emulator_host:
+                from google.auth.credentials import AnonymousCredentials
+
+                self._client = bigquery.Client(
+                    project=self.project_id,
+                    credentials=AnonymousCredentials(),
+                    client_options={"api_endpoint": f"http://{emulator_host}"},
+                )
+            else:
+                self._client = bigquery.Client(project=self.project_id)
         return self._client
 
     def _table_id(self, table: str) -> str:
