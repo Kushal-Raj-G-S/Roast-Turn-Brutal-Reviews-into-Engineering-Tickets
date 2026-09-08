@@ -191,6 +191,11 @@ jobs:
   dbt:
     name: dbt — parse & test
     runs-on: ubuntu-latest
+    # `secrets` isn't a recognized context inside `if:` — GitHub rejects the
+    # whole workflow file at parse time if it's referenced there directly.
+    # Read it into a job-level env var first, then branch on that instead.
+    env:
+      HAS_BQ_SERVICE_ACCOUNT: ${{ secrets.BIGQUERY_SERVICE_ACCOUNT != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -239,7 +244,7 @@ jobs:
 
       # Full build only when a real service account is configured.
       - name: dbt build (live warehouse)
-        if: ${{ secrets.BIGQUERY_SERVICE_ACCOUNT != '' }}
+        if: ${{ env.HAS_BQ_SERVICE_ACCOUNT == 'true' }}
         working-directory: dbt/roast_dbt
         env:
           DBT_PROFILES_DIR: .
