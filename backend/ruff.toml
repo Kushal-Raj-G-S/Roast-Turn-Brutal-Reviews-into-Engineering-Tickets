@@ -1,0 +1,57 @@
+# Explicit lint configuration so CI is deterministic (an unpinned rule set
+# means a ruff upgrade can fail a build that touched nothing).
+
+target-version = "py313"
+line-length = 110
+
+[lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes — real bugs: undefined names, unused imports
+    "I",      # import sorting
+    "B",      # bugbear — mutable defaults, etc.
+    "SIM",    # simplifications
+    "PERF",   # obvious performance mistakes
+    "PIE",
+    "S",      # bandit security checks
+]
+
+ignore = [
+    # --- Deliberately not enforced: conflicts with existing house style ---
+    # The codebase uses typing.List/Dict/Optional consistently across every
+    # module. Enforcing PEP-585/604 here would make the new files the only
+    # inconsistent ones, so this is a whole-codebase migration or nothing.
+    "UP006", "UP035", "UP045",
+
+    # ABC methods in this codebase are written as `"""docstring"""` + `pass`
+    # (see the IMessageQueue / repository ports). That's the established
+    # pattern; flagging the placeholder would flag every port.
+    "PIE790",
+
+    # datetime.utcnow() is used throughout (including as dataclass
+    # default_factory in domain/entities.py). BigQuery TIMESTAMP columns are
+    # UTC-based, so a naive UTC datetime loads correctly — the hazard would
+    # be *mixing* aware and naive, which staying consistent avoids. Migrating
+    # to timezone-aware datetimes is a separate, codebase-wide change.
+    "DTZ003",
+
+    # logger.error(..., exc_info=True) is the established pattern here rather
+    # than logger.exception(...).
+    "G201",
+
+    # Broad `except Exception` is intentional in two specific shapes:
+    # consumer loops that must survive a poison message, and GCP
+    # get_table/get_dataset existence probes (the client raises rather than
+    # returning None). Both are annotated at the call site.
+    "BLE001", "S110",
+
+    # Long explanatory comments are preferred over cramming.
+    "E501",
+]
+
+[lint.per-file-ignores]
+# Tests use asserts (that's the point) and construct throwaway fixtures.
+"tests/**" = ["S101"]
+
+[lint.isort]
+known-first-party = ["src", "app"]

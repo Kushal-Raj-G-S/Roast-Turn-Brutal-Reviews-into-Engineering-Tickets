@@ -1,0 +1,24 @@
+# Non-secret runtime settings. Apply this (with real values) before the
+# Deployment. Secrets (DATABASE_URL, SUPABASE_*, KAFKA_SASL_*) go in the
+# separate `roast-backend-secrets` Secret — ideally synced from Google
+# Secret Manager via External Secrets Operator rather than kubectl-applied,
+# so credentials never sit in a git-tracked manifest.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: roast-backend-config
+data:
+  GCP_PROJECT_ID: "your-gcp-project-id"
+  GCS_STAGING_BUCKET: "your-gcp-project-id-roast-staging"
+  BIGQUERY_DATASET: "roast_warehouse"
+  BIGQUERY_LOCATION: "US"
+
+  EVENT_BUS_BACKEND: "kafka"
+  KAFKA_BOOTSTRAP_SERVERS: "your-broker.upstash.io:9092"
+  KAFKA_CONSUMER_GROUP: "roast-workers"
+  KAFKA_SECURITY_PROTOCOL: "SASL_SSL"
+  KAFKA_SASL_MECHANISM: "SCRAM-SHA-256"
+
+  PIPELINE_VERSION: "v1"
+  FRONTEND_URL: "https://roast.systems"

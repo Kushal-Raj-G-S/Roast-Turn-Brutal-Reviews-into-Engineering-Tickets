@@ -1,0 +1,6 @@
+# Run `dbt deps` before `dbt run` to install these.
+# dbt_utils provides accepted_range and unique_combination_of_columns,
+# used by the schema tests in models/*/schema.yml.
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.3.0", "<2.0.0"]

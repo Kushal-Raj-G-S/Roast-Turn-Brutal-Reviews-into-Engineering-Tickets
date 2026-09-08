@@ -1,0 +1,176 @@
+# Roast backend on GKE.
+#
+# Resource requests/limits are sized around the ONNX embedding workload's
+# actual footprint (CPU-bound, ~1GB resident for the loaded model), not
+# copied defaults. The HPA scales on CPU because that's the bottleneck
+# resource for this workload.
+#
+# Authentication uses Workload Identity — the pod's Kubernetes service
+# account impersonates the GCP service account created in
+# infra/terraform/main.tf, so BigQuery/GCS credentials come from the
+# metadata server and no JSON key is ever mounted or stored in a Secret.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: roast-backend
+  annotations:
+    # Value comes from `terraform output k8s_service_account_annotation`
+    iam.gke.io/gcp-service-account: roast-pipeline@PROJECT_ID.iam.gserviceaccount.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: roast-backend
+  labels:
+    app: roast-backend
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0   # no capacity dip during a rollout
+  selector:
+    matchLabels:
+      app: roast-backend
+  template:
+    metadata:
+      labels:
+        app: roast-backend
+    spec:
+      serviceAccountName: roast-backend
+      # The embedding model loads from disk on start; give pods time to
+      # terminate in-flight work rather than killing mid-batch.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: roast-backend
+          image: gcr.io/PROJECT_ID/roast-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1.5Gi"
+            limits:
+              # No CPU limit on purpose: CPU throttling on a burstable,
+              # CPU-bound embedding workload causes latency cliffs. The
+              # request guarantees a floor; the HPA handles scale-out.
+              memory: "3Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # HF model cache needs writes
+            capabilities:
+              drop: ["ALL"]
+          # Model load can take ~60s — startupProbe keeps the liveness
+          # probe from killing the pod before it's ever ready.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          env:
+            - name: GCP_PROJECT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: roast-backend-config
+                  key: GCP_PROJECT_ID
+            - name: GCS_STAGING_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: roast-backend-config
+                  key: GCS_STAGING_BUCKET
+            - name: EVENT_BUS_BACKEND
+              valueFrom:
+                configMapKeyRef:
+                  name: roast-backend-config
+                  key: EVENT_BUS_BACKEND
+          envFrom:
+            # Non-secret settings
+            - configMapRef:
+                name: roast-backend-config
+            # DATABASE_URL, SUPABASE_*, KAFKA_SASL_* — created out-of-band
+            # (ideally synced from Secret Manager, not kubectl-applied)
+            - secretRef:
+                name: roast-backend-secrets
+          volumeMounts:
+            - name: model-cache
+              mountPath: /home/roast/.cache/huggingface
+      volumes:
+        # emptyDir per pod: avoids re-downloading the embedding model on
+        # container restart within the same pod. For faster cold starts
+        # across pods, swap for a ReadOnlyMany PVC preloaded with the model.
+        - name: model-cache
+          emptyDir:
+            sizeLimit: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: roast-backend-svc
+spec:
+  selector:
+    app: roast-backend
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: roast-backend-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: roast-backend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      # Embedding bursts arrive fast; don't dawdle.
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      # But don't thrash pods that hold a warm model cache.
+      stabilizationWindowSeconds: 300
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: roast-backend-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: roast-backend

@@ -153,6 +153,12 @@ async def process_upload_v2(upload_id: UploadId, session: AsyncSession):
         clustering_engine = container.resolve(IClusteringEngine)
         ranking_strategy = container.resolve(IRankingStrategy)
         
+        # Real event bus (memory/redis/kafka per Config.EVENT_BUS_BACKEND).
+        # The pipeline emits a domain event per stage; without this those
+        # publishes were no-ops.
+        from src.infrastructure.messaging.bus_provider import get_event_bus
+        event_bus = await get_event_bus()
+
         # Create pipeline
         pipeline = BulkProcessingPipeline(
             upload_repo=upload_repo,
@@ -163,7 +169,7 @@ async def process_upload_v2(upload_id: UploadId, session: AsyncSession):
             actionability_scorer=None,  # Optional
             ai_analysis_service=None,   # Optional
             file_storage=None,           # Optional
-            event_bus=None               # Will be added later
+            event_bus=event_bus
         )
         
         # Execute pipeline

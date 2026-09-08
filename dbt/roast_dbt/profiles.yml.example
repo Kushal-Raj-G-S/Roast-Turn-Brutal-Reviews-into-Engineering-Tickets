@@ -1,0 +1,20 @@
+# Install with PINNED versions in a dedicated venv:
+#   pip install "dbt-core~=1.9.0" "dbt-bigquery~=1.9.0"
+# A bare `pip install dbt-bigquery` can resolve to a pre-release stub
+# with no dbt-core and no working CLI. Then: dbt deps && dbt build
+#
+# Copy to ~/.dbt/profiles.yml (or set DBT_PROFILES_DIR to this folder) and
+# fill in your own GCP project id + service-account key path.
+# No local database software needed — dbt talks to BigQuery over its API.
+
+roast_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      project: your-gcp-project-id
+      dataset: roast_warehouse
+      keyfile: /path/to/service-account.json
+      threads: 4
+      location: US

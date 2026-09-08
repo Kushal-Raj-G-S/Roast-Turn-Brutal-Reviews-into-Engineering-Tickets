@@ -57,3 +57,18 @@ faiss-cpu>=1.15.0    # Facebook AI Similarity Search (CPU build)
 supabase>=2.31.0
 python-multipart>=0.0.32
 email-validator>=2.3.0
+
+# Cloud & Data Platform — Kafka ingest, GCS staging, BigQuery warehouse.
+# Airflow and dbt run from their OWN virtualenvs (see
+# docs/PLATFORM_REARCHITECTURE.md): Airflow pins narrow ranges across
+# dozens of transitive deps and will fight this file's pins if installed
+# into the same environment.
+aiokafka>=0.11.0                 # async Kafka client — matches the async IMessageQueue port
+google-cloud-bigquery>=3.27.0    # warehouse sink (batch load jobs)
+google-cloud-storage>=2.18.0     # GCS Parquet staging between DAG stages
+pyarrow>=17.0.0                  # Parquet engine for the staging round-trip
+
+# Test/lint tooling (CI installs these; kept here so `pytest` works locally)
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+ruff>=0.8.0

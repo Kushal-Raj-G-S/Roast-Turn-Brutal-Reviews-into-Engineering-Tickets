@@ -1,0 +1,87 @@
+[
+  {
+    "name": "id",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "text",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "rating",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "version",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "device",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "review_date",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "is_verified",
+    "type": "BOOLEAN",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "actionability_score",
+    "type": "FLOAT",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "actionability_confidence",
+    "type": "FLOAT",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "is_actionable",
+    "type": "BOOLEAN",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "embedding_dimension",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "embedding_model",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "cluster_id",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "tenant_id",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "created_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "upload_id",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "ingested_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  }
+]

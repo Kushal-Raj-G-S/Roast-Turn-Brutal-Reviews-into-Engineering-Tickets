@@ -75,12 +75,39 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ Weekly digest scheduler failed to start (continuing without it): {e}")
 
+    # Event consumers — give the v2 pipeline path its completion alerts.
+    # Off by default: requires migrations/create_processed_events.sql to
+    # have been applied (see Config.EVENT_CONSUMERS_ENABLED).
+    try:
+        from app.core.config import config as _cfg
+
+        if _cfg.EVENT_CONSUMERS_ENABLED:
+            from src.infrastructure.messaging.bus_provider import get_event_bus
+            from src.infrastructure.messaging.consumers import register_consumers
+
+            await register_consumers(await get_event_bus())
+            logger.info(
+                f"✅ Event consumers started (backend={_cfg.EVENT_BUS_BACKEND})"
+            )
+        else:
+            logger.info("ℹ️ Event consumers disabled (EVENT_CONSUMERS_ENABLED=false)")
+    except Exception as e:
+        logger.warning(f"⚠️ Event consumers failed to start (continuing without them): {e}")
+
     yield
 
     logger.info("🛑 Roast API shutting down...")
     stop_worker()
     if scheduler:
         scheduler.shutdown(wait=False)
+
+    # Flush the event bus before exit — an un-stopped Kafka producer can
+    # drop messages still sitting in its linger buffer.
+    try:
+        from src.infrastructure.messaging.bus_provider import shutdown_event_bus
+        await shutdown_event_bus()
+    except Exception as e:
+        logger.warning(f"⚠️ Event bus shutdown failed: {e}")
 
 
 app = FastAPI(

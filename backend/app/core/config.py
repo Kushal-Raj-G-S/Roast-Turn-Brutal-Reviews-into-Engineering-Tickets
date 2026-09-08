@@ -81,6 +81,72 @@ class Config:
         "perfect", "fantastic", "wonderful", "outstanding"
     ]
     
+    # ------------------------------------------------------------------
+    # Data platform: Kafka ingest, GCS staging, BigQuery warehouse
+    # ------------------------------------------------------------------
+    # Event bus backend: "memory" (dev), "redis", or "kafka" (production).
+    # Selects which IMessageQueue implementation create_event_bus() builds.
+    EVENT_BUS_BACKEND: str = os.getenv("EVENT_BUS_BACKEND", "memory")
+
+    # Start the event consumers (src/infrastructure/messaging/consumers.py)
+    # at app startup. Default OFF because the consumers require the
+    # processed_events inbox table — run
+    # migrations/create_processed_events.sql first, then enable. Turning
+    # this on before the migration would make every consumed event fail
+    # into the DLQ.
+    EVENT_CONSUMERS_ENABLED: bool = os.getenv(
+        "EVENT_CONSUMERS_ENABLED", "false"
+    ).lower() in ("1", "true", "yes")
+
+    # Kafka. Works against any Kafka-protocol broker: a local Docker broker
+    # (PLAINTEXT) or a managed one such as Upstash/Confluent (SASL_SSL).
+    KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    KAFKA_CONSUMER_GROUP: str = os.getenv("KAFKA_CONSUMER_GROUP", "roast-workers")
+    KAFKA_SECURITY_PROTOCOL: str = os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")
+    KAFKA_SASL_MECHANISM: Optional[str] = os.getenv("KAFKA_SASL_MECHANISM")
+    KAFKA_SASL_USERNAME: Optional[str] = os.getenv("KAFKA_SASL_USERNAME")
+    KAFKA_SASL_PASSWORD: Optional[str] = os.getenv("KAFKA_SASL_PASSWORD")
+
+    # GCP. GCS holds inter-stage Parquet payloads (embeddings are far too
+    # large to pass through Airflow XCom); BigQuery is the analytical sink.
+    GCP_PROJECT_ID: Optional[str] = os.getenv("GCP_PROJECT_ID")
+    GCS_STAGING_BUCKET: Optional[str] = os.getenv("GCS_STAGING_BUCKET")
+    BIGQUERY_DATASET: str = os.getenv("BIGQUERY_DATASET", "roast_warehouse")
+    BIGQUERY_LOCATION: str = os.getenv("BIGQUERY_LOCATION", "US")
+
+    # Tags pipeline runs so the dbt regression model can diff v1/v2/v3
+    # shadow deployments against each other.
+    PIPELINE_VERSION: str = os.getenv("PIPELINE_VERSION", "v1")
+
+    @classmethod
+    def event_bus_kwargs(cls) -> dict:
+        """Backend-specific kwargs for create_event_bus(cls.EVENT_BUS_BACKEND, **kwargs)."""
+        if cls.EVENT_BUS_BACKEND == "kafka":
+            return {
+                "bootstrap_servers": cls.KAFKA_BOOTSTRAP_SERVERS,
+                "consumer_group": cls.KAFKA_CONSUMER_GROUP,
+                "security_protocol": cls.KAFKA_SECURITY_PROTOCOL,
+                "sasl_mechanism": cls.KAFKA_SASL_MECHANISM,
+                "sasl_username": cls.KAFKA_SASL_USERNAME,
+                "sasl_password": cls.KAFKA_SASL_PASSWORD,
+            }
+        if cls.EVENT_BUS_BACKEND == "redis":
+            return {"redis_url": os.getenv("REDIS_URL", "redis://localhost:6379")}
+        return {}
+
+    @classmethod
+    def require_gcp(cls) -> None:
+        """Fail fast with a clear message rather than deep inside a GCP client call."""
+        missing = [
+            name for name in ("GCP_PROJECT_ID", "GCS_STAGING_BUCKET")
+            if not getattr(cls, name)
+        ]
+        if missing:
+            raise RuntimeError(
+                f"Missing required GCP settings: {', '.join(missing)}. "
+                "Set them in .env — see docs/PLATFORM_REARCHITECTURE.md."
+            )
+
     @classmethod
     def ensure_upload_dir(cls):
         """Create upload directory if it doesn't exist."""

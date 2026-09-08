@@ -1,0 +1,72 @@
+[
+  {
+    "name": "cluster_id",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "upload_id",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "tenant_id",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "title",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "issue_fingerprint",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "severity",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "status",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "review_count",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "avg_rating",
+    "type": "FLOAT",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "affected_versions",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "keywords",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "ai_analyzed",
+    "type": "BOOLEAN",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "created_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "ingested_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  }
+]

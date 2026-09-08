@@ -4,12 +4,13 @@ Supports multiple backends: in-memory, Redis, Celery, RabbitMQ, Kafka.
 """
 
 import asyncio
+import contextlib
+import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Type
-from dataclasses import dataclass, asdict
-import json
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Callable, Dict, List
 from uuid import uuid4
 
 from src.domain.events import DomainEvent, EventType
@@ -106,7 +107,7 @@ class InMemoryQueue(IMessageQueue):
         """Start consuming messages from all queues."""
         self.is_consuming = True
         
-        for event_type in self.handlers.keys():
+        for event_type in self.handlers:
             if event_type not in self.queues:
                 self.queues[event_type] = asyncio.Queue(maxsize=self.max_size)
             
@@ -230,7 +231,7 @@ class RedisQueue(IMessageQueue):
         """Start consuming from Redis streams."""
         self.is_consuming = True
         
-        for event_type in self.handlers.keys():
+        for event_type in self.handlers:
             task = asyncio.create_task(self._consume_stream(event_type))
             self._consumer_tasks.append(task)
         
@@ -258,11 +259,9 @@ class RedisQueue(IMessageQueue):
         consumer_group = "roast-workers"
         consumer_name = f"worker-{uuid4().hex[:8]}"
         
-        # Create consumer group if doesn't exist
-        try:
+        # Create consumer group if it doesn't exist (raises if it already does)
+        with contextlib.suppress(Exception):
             await redis.xgroup_create(stream_key, consumer_group, id="0", mkstream=True)
-        except Exception:
-            pass  # Group already exists
         
         handlers = self.handlers.get(event_type, [])
         
@@ -277,7 +276,7 @@ class RedisQueue(IMessageQueue):
                     block=1000
                 )
                 
-                for stream, message_list in messages:
+                for _stream, message_list in messages:
                     for message_id, message_data in message_list:
                         # Parse message
                         message = Message(
@@ -425,11 +424,11 @@ class EventBus:
 def create_event_bus(backend: str = "memory", **kwargs) -> EventBus:
     """
     Create event bus with specified backend.
-    
+
     Args:
-        backend: "memory", "redis", or "celery"
+        backend: "memory", "redis", or "kafka"
         **kwargs: Backend-specific configuration
-    
+
     Returns:
         Configured EventBus instance
     """
@@ -437,7 +436,17 @@ def create_event_bus(backend: str = "memory", **kwargs) -> EventBus:
         queue = InMemoryQueue(max_size=kwargs.get("max_size", 1000))
     elif backend == "redis":
         queue = RedisQueue(redis_url=kwargs.get("redis_url", "redis://localhost:6379"))
+    elif backend == "kafka":
+        from .kafka_queue import KafkaQueue
+        queue = KafkaQueue(
+            bootstrap_servers=kwargs.get("bootstrap_servers", "localhost:9092"),
+            consumer_group=kwargs.get("consumer_group", "roast-workers"),
+            security_protocol=kwargs.get("security_protocol", "PLAINTEXT"),
+            sasl_mechanism=kwargs.get("sasl_mechanism"),
+            sasl_username=kwargs.get("sasl_username"),
+            sasl_password=kwargs.get("sasl_password"),
+        )
     else:
         raise ValueError(f"Unsupported backend: {backend}")
-    
+
     return EventBus(queue)

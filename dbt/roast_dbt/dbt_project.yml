@@ -1,0 +1,18 @@
+name: 'roast_dbt'
+version: '1.0.0'
+config-version: 2
+
+profile: 'roast_dbt'
+
+model-paths: ["models"]
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  roast_dbt:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

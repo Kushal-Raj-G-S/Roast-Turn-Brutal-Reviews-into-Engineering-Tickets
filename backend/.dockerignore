@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+.venv
+venv
+.env
+qdrant_data
+uploads
+traces
+shadow_results_production
+*.csv
+.git

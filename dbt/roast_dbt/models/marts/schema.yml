@@ -1,0 +1,38 @@
+version: 2
+
+models:
+  - name: issue_clusters_summary
+    description: >
+      One row per issue cluster with a 4-signal weighted priority score
+      (volume, severity, actionability, inverted rating). Incremental and
+      partitioned so a rebuild doesn't rescan the full review history.
+    columns:
+      - name: cluster_id
+        tests: [unique, not_null]
+      - name: priority_score
+        description: Weighted 0-1 priority. Out-of-range means a weighting bug.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+      - name: tenant_id
+        tests: [not_null]
+
+  - name: regression_detection
+    description: >
+      Cross-version regression status per issue, computed with LAG() over
+      (tenant_id, issue_fingerprint). Partitioned by fingerprint rather
+      than cluster_id because cluster_id is a per-upload UUID and would
+      never match across pipeline versions.
+    columns:
+      - name: issue_fingerprint
+        tests: [not_null]
+      - name: regression_status
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['NEW', 'REGRESSED_SEVERITY', 'REGRESSED_VOLUME', 'IMPROVED', 'STABLE']
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [tenant_id, issue_fingerprint, current_pipeline_version]

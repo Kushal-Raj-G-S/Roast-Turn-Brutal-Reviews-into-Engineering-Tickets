@@ -95,7 +95,9 @@ chroma_db/
 # Extra files (docs, tests, migration scripts)
 extra/
 
-# Test files and scripts
+# Throwaway scratch/debug scripts at the repo root (a.py, quick_*.py etc.).
+# NOTE: this pattern matches files at ANY depth, so it silently excluded the
+# real test suite too — hence the negation below.
 test_*.py
 test_*.json
 a.py
@@ -110,3 +112,62 @@ split_dataset.py
 *.db
 *.sqlite
 *.sqlite3
+
+# ---------------------------------------------------------------
+# Data platform (Kafka / Airflow / BigQuery / dbt / Terraform)
+# ---------------------------------------------------------------
+
+# Terraform — state files contain resource metadata AND secrets in
+# plaintext. Never commit them; use a remote GCS backend for shared state.
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/*.tfvars
+# NOTE: .terraform.lock.hcl IS committed on purpose — it pins provider
+# checksums so every machine and CI resolve identical provider versions.
+# Locked for linux_amd64 (CI), windows_amd64 (dev) and darwin_arm64.
+crash.log
+
+# dbt — profiles.yml holds the BigQuery service-account keyfile path (and
+# in CI, the inlined key itself). Only profiles.yml.example is tracked.
+dbt/roast_dbt/profiles.yml
+dbt/roast_dbt/target/
+dbt/roast_dbt/dbt_packages/
+dbt/roast_dbt/logs/
+
+# GCP service-account keys — should never be on disk in the repo at all
+*-service-account.json
+service-account*.json
+gcp-key*.json
+
+# Airflow local runtime
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/logs/
+airflow/standalone_admin_password.txt
+
+# Python
+__pycache__/
+*.py[cod]
+backend/venv/
+backend/.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local Airflow test venv
+.airflow-venv/
+
+# Local dbt test venv
+.dbt-venv/
+.airflow-home/
+
+# dbt writes an anonymous install id here — machine-local, not project config
+dbt/roast_dbt/.user.yml
+
+# The real test suite IS tracked. Re-included explicitly because the
+# `test_*.py` pattern above matches at any depth and would otherwise make it
+# impossible to commit tests at all.
+!backend/tests/
+!backend/tests/**/
+!backend/tests/**/test_*.py
+!backend/tests/test_*.py

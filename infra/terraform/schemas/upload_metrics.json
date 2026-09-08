@@ -1,0 +1,47 @@
+[
+  {
+    "name": "upload_id",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "tenant_id",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "total_reviews",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "filtered_noise",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "actionable_reviews",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "clusters_created",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "processing_time_ms",
+    "type": "INTEGER",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "pipeline_version",
+    "type": "STRING",
+    "mode": "NULLABLE"
+  },
+  {
+    "name": "created_at",
+    "type": "TIMESTAMP",
+    "mode": "NULLABLE"
+  }
+]
