@@ -75,9 +75,20 @@ jobs:
           KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
           KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
 
+      # GH Actions service containers can't be given a custom command/args
+      # (unlike docker-compose) — only env vars. Without --project the
+      # binary exits immediately ("the required flag --project was not
+      # specified") and the port never opens; it silently never took these
+      # values from anywhere before, because local verification always used
+      # `docker run ... --project=test-project --dataset=roast_warehouse`
+      # directly (see the docstring in test_regression_sql_integration.py),
+      # never this services: block.
       bigquery:
         image: ghcr.io/goccy/bigquery-emulator:latest
         ports: ['9050:9050']
+        env:
+          BIGQUERY_EMULATOR_PROJECT: test-project
+          BIGQUERY_EMULATOR_DATASET: roast_warehouse
 
       # Throwaway Postgres for the consumer-inbox tests. Deliberately NOT
       # the app's real DATABASE_URL — those tests apply migrations and
