@@ -7,7 +7,7 @@ Kafka broker (no network calls in CI).
 import pytest
 
 from src.infrastructure.messaging.event_bus import IMessageQueue, Message
-from src.infrastructure.messaging.kafka_queue import KafkaQueue, TOPIC_PREFIX
+from src.infrastructure.messaging.kafka_queue import TOPIC_PREFIX, KafkaQueue
 
 
 def test_kafka_queue_implements_message_queue_port():

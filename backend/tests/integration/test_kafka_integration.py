@@ -165,8 +165,9 @@ async def test_exhausted_retries_go_to_dead_letter_topic():
     await _drain(queue, lambda: len(attempts) >= 3, timeout=30)
 
     # Now read the DLQ directly and confirm the message is there, tagged.
-    from aiokafka import AIOKafkaConsumer
     import json
+
+    from aiokafka import AIOKafkaConsumer
 
     dlq_topic = queue._dlq_for(event_type)
     consumer = AIOKafkaConsumer(

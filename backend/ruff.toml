@@ -51,7 +51,14 @@ ignore = [
 
 [lint.per-file-ignores]
 # Tests use asserts (that's the point) and construct throwaway fixtures.
-"tests/**" = ["S101"]
+# S608: these queries interpolate a test-generated throwaway table/dataset
+# name (a uuid the test itself created a few lines above), never external
+# input — bandit can't tell the difference from real user-input SQL
+# injection. Production code (bigquery_sink.py) has no S608 findings and
+# stays covered by this rule.
+# S106: "pass"/"user" here are literal SASL creds fed to a client that's
+# never given a real broker to connect to — not a credential leak.
+"tests/**" = ["S101", "S608", "S106"]
 
 [lint.isort]
 known-first-party = ["src", "app"]

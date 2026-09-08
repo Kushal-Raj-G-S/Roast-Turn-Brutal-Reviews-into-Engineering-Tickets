@@ -18,6 +18,7 @@ Run with:
 Skipped automatically when no server is reachable.
 """
 
+import contextlib
 import os
 import socket
 import uuid
@@ -69,10 +70,8 @@ def bucket_ready():
     client = storage.Client(
         project="test-project", credentials=AnonymousCredentials()
     )
-    try:
-        client.create_bucket(BUCKET)
-    except Exception:
-        pass  # already exists
+    with contextlib.suppress(Exception):
+        client.create_bucket(BUCKET)  # already exists
     return client
 
 
@@ -126,7 +125,7 @@ def test_write_then_read_preserves_everything(store):
     restored = store.read_reviews(uri)
     assert len(restored) == 50
 
-    for orig, got in zip(originals, restored):
+    for orig, got in zip(originals, restored, strict=True):
         assert got.id == orig.id
         assert got.text == orig.text
         assert got.metadata.rating == orig.metadata.rating

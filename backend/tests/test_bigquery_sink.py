@@ -3,6 +3,8 @@ Schema/config tests for BigQueryWarehouseSink — no network, no GCP
 credentials required.
 """
 
+from src.domain.entities import Review
+from src.domain.value_objects import ReviewMetadata
 from src.infrastructure.warehouse.bigquery_sink import (
     CLUSTERS_SCHEMA,
     REVIEW_EXCLUDED_COLUMNS,
@@ -11,8 +13,6 @@ from src.infrastructure.warehouse.bigquery_sink import (
     BigQueryWarehouseSink,
 )
 from src.infrastructure.warehouse.review_codec import review_to_dict
-from src.domain.entities import Review
-from src.domain.value_objects import ReviewMetadata
 
 
 def test_schemas_use_valid_bigquery_types():
