@@ -270,7 +270,22 @@ class APIClient {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetch(`${this.baseURL}/upload`, {
+    // Which backend pipeline handles this upload.
+    //
+    // Defaults to v1 (`/upload`), which is what every upload has used to
+    // date. Set NEXT_PUBLIC_USE_V2_UPLOAD=true to post to `/api/v2/upload`
+    // instead, which runs the event-driven pipeline: domain entities, the
+    // real event bus, and the consumer that sends the completion alert.
+    // Routing is purely path-based on the backend (the middleware only
+    // switches on a `/api/v2/` prefix — USE_V2_ARCHITECTURE does not affect
+    // it), so hitting v2 requires this different URL, not a backend flag.
+    //
+    // Both endpoints take the same Bearer token and v2's JSON response is a
+    // superset of v1's, so nothing else here changes.
+    const uploadPath =
+      process.env.NEXT_PUBLIC_USE_V2_UPLOAD === 'true' ? '/api/v2/upload' : '/upload';
+
+    const response = await fetch(`${this.baseURL}${uploadPath}`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${this.token}`,

@@ -219,11 +219,12 @@ async def handle_upload_completed_warehouse(message: Message) -> None:
         return
 
     try:
-        from sqlmodel import Session, select
-
-        from app.database.database import engine
-        from app.models.bulk_models import Cluster as ClusterModel
-        from app.models.bulk_models import Upload as UploadModel
+        from app.database.database import AsyncSessionLocal
+        from src.domain.value_objects import UploadId
+        from src.infrastructure.persistence.repositories import (
+            PostgresClusterRepository,
+            PostgresUploadRepository,
+        )
         from src.infrastructure.warehouse.bigquery_sink import BigQueryWarehouseSink
 
         sink = BigQueryWarehouseSink(
@@ -233,20 +234,55 @@ async def handle_upload_completed_warehouse(message: Message) -> None:
         )
         sink.ensure_schema()
 
-        with Session(engine) as session:
-            upload = session.get(UploadModel, upload_id)
+        # Read through the repositories, NOT raw SQLModel rows. The sink is
+        # written against the domain entities (src/domain/entities.py) and does
+        # `upload.id.value`, so handing it a SQLModel row — whose .id is a
+        # plain int — dies with "'int' object has no attribute 'value'". That
+        # is what happened on upload 91: the event was claimed, the load threw,
+        # this handler swallowed it, and BigQuery stayed empty while everything
+        # else looked green. The repositories' _to_domain() does the mapping.
+        async with AsyncSessionLocal() as session:
+            upload_repo = PostgresUploadRepository(session)
+            cluster_repo = PostgresClusterRepository(session)
+
+            upload = await upload_repo.get_by_id(UploadId(upload_id))
             if upload is None:
                 logger.warning(f"Upload {upload_id} vanished; nothing to warehouse")
                 return
-            clusters = list(
-                session.exec(select(ClusterModel).where(ClusterModel.upload_id == upload_id))
-            )
+            clusters = await cluster_repo.list_by_upload(UploadId(upload_id))
 
-        rows = sink.load_clusters(upload, clusters)
-        logger.info(
-            f"Warehoused upload {upload_id}: {rows} cluster rows -> "
-            f"{Config.GCP_PROJECT_ID}.{Config.BIGQUERY_DATASET}"
-        )
+        # One row per run, keyed by (upload_id, pipeline_version) -- the table
+        # the dbt regression model diffs versions against. Streaming insert,
+        # so it does not depend on the load-job path below.
+        if upload.metrics:
+            sink.load_upload_metrics(
+                upload, upload.metrics, pipeline_version=Config.PIPELINE_VERSION
+            )
+            logger.info(f"Warehoused metrics for upload {upload_id}")
+
+        if not clusters:
+            logger.info(f"Upload {upload_id} produced no clusters; nothing more to warehouse")
+            return
+
+        try:
+            rows = sink.load_clusters(upload, clusters)
+            logger.info(
+                f"Warehoused upload {upload_id}: {rows} cluster rows -> "
+                f"{Config.GCP_PROJECT_ID}.{Config.BIGQUERY_DATASET}"
+            )
+        except Exception as load_err:
+            # Kept separate from the metrics insert above so one cannot mask
+            # the other. load_clusters uses a batch LOAD JOB (deliberately --
+            # streaming is billed and caps near 10MB, see the module
+            # docstring), and a load job is a resumable upload.
+            # goccy/bigquery-emulator panics on that request with
+            # "runtime error: invalid memory address or nil pointer
+            # dereference", so the cluster load cannot be exercised against
+            # the emulator at all. Real BigQuery handles it normally.
+            logger.error(
+                f"Cluster load-job failed for upload {upload_id} "
+                f"(metrics still warehoused): {load_err}"
+            )
 
     except Exception as e:
         # Left claimed on purpose: a partially-completed load job re-run by a

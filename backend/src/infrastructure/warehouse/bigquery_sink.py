@@ -179,11 +179,38 @@ class BigQueryWarehouseSink:
             emulator_host = os.getenv("BIGQUERY_EMULATOR_HOST")
             if emulator_host:
                 from google.auth.credentials import AnonymousCredentials
+                from google.auth.transport.requests import AuthorizedSession
 
+                class _EmulatorSession(AuthorizedSession):
+                    """
+                    Rewrite the emulator's self-advertised 0.0.0.0 host.
+
+                    load_table_from_file uses a RESUMABLE upload: the client
+                    POSTs to initiate, and the server returns the session URL
+                    to continue against. goccy/bigquery-emulator builds that
+                    URL from its own bind address, so it hands back
+                    http://0.0.0.0:9050/upload/... Connecting to 0.0.0.0 is
+                    invalid on Windows (WinError 10049), so every load job hung
+                    in retry/backoff and then failed -- which is why this sink
+                    had never actually written a row anywhere.
+
+                    Real BigQuery returns a proper googleapis.com URL and Linux
+                    treats 0.0.0.0 as loopback, so this only matters for an
+                    emulator on a Windows host. Gated behind
+                    BIGQUERY_EMULATOR_HOST, so production is untouched.
+                    """
+
+                    def request(self, method, url, *args, **kwargs):
+                        if "//0.0.0.0" in url:
+                            url = url.replace("//0.0.0.0", f"//{emulator_host.split(':')[0]}", 1)
+                        return super().request(method, url, *args, **kwargs)
+
+                creds = AnonymousCredentials()
                 self._client = bigquery.Client(
                     project=self.project_id,
-                    credentials=AnonymousCredentials(),
+                    credentials=creds,
                     client_options={"api_endpoint": f"http://{emulator_host}"},
+                    _http=_EmulatorSession(creds),
                 )
             else:
                 self._client = bigquery.Client(project=self.project_id)
