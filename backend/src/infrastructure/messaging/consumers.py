@@ -114,11 +114,22 @@ async def handle_upload_completed(message: Message) -> None:
         return
 
     try:
+        from sqlmodel import Session
+
         from app.core.shadow_deployment import _send_upload_alerts
-        from app.database.database import SessionLocal
+        from app.database.database import engine
         from app.models.bulk_models import Cluster, Upload
 
-        with SessionLocal() as session:
+        # Must be a SQLModel Session, not app.database.SessionLocal (which is
+        # a plain sqlalchemy.orm sessionmaker). shadow_deployment is written
+        # against SQLModel and calls session.exec(); a SQLAlchemy Session has
+        # only .execute(), so every alert died on
+        # "'Session' object has no attribute 'exec'" — and because this
+        # handler swallows notification errors by design, it failed SILENTLY:
+        # the pipeline reported success, the event was marked consumed, and
+        # the user simply never got told. SQLModel's Session subclasses
+        # SQLAlchemy's, so .get() and .query() below still work.
+        with Session(engine) as session:
             upload = session.get(Upload, upload_id)
             if upload is None:
                 logger.warning(f"Upload {upload_id} not found; nothing to notify")

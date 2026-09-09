@@ -54,6 +54,20 @@ async_engine = create_async_engine(
     connect_args={
         "server_settings": {"jit": "off"},
         "command_timeout": 60,
+        # MANDATORY companion to the :6543 transaction-mode pooler above.
+        # pgbouncer in transaction mode multiplexes one server connection
+        # across clients, so a prepared statement created on one request is
+        # not there on the next -- and asyncpg, which prepares and caches
+        # every statement by default, then collides with its own cached
+        # names: "prepared statement __asyncpg_stmt_2__ already exists".
+        #
+        # This made EVERY async query past the first fail, i.e. the whole v2
+        # path was unusable against the pooler. v1 was unaffected because it
+        # uses psycopg2, which does not prepare implicitly. Both caches have
+        # to be off: statement_cache_size is asyncpg's, and
+        # prepared_statement_cache_size is the SQLAlchemy asyncpg dialect's.
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
     }
 )
 

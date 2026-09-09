@@ -24,7 +24,7 @@ class PostgresUploadRepository(IUploadRepository):
 
     async def create(self, upload: Upload) -> Upload:
         """Create a new upload."""
-        from app.bulk_models import Upload as UploadModel
+        from app.models.bulk_models import Upload as UploadModel
         
         # Map domain entity to SQLModel
         upload_model = UploadModel(
@@ -49,7 +49,7 @@ class PostgresUploadRepository(IUploadRepository):
 
     async def get_by_id(self, upload_id: UploadId) -> Optional[Upload]:
         """Get upload by ID."""
-        from app.bulk_models import Upload as UploadModel
+        from app.models.bulk_models import Upload as UploadModel
         
         stmt = select(UploadModel).where(UploadModel.id == upload_id.value)
         result = await self.session.execute(stmt)
@@ -63,7 +63,7 @@ class PostgresUploadRepository(IUploadRepository):
 
     async def update(self, upload: Upload) -> Upload:
         """Update an existing upload."""
-        from app.bulk_models import Upload as UploadModel
+        from app.models.bulk_models import Upload as UploadModel
         
         stmt = select(UploadModel).where(UploadModel.id == upload.id.value)
         result = await self.session.execute(stmt)
@@ -75,7 +75,13 @@ class PostgresUploadRepository(IUploadRepository):
         # Update fields
         upload_model.status = upload.status.value
         upload_model.error_message = upload.error_message
-        upload_model.started_at = upload.started_at
+        # NOTE: no started_at here. The domain entity tracks started_at, but
+        # neither the SQLModel nor the uploads table has that column, and
+        # SQLModel rejects assignment to an undeclared field outright
+        # ('"Upload" object has no field "started_at"'), so this line raised
+        # on every update() call and killed the pipeline at its first status
+        # transition. If start time needs persisting, add the column and the
+        # model field first — assigning it here cannot create either.
         upload_model.completed_at = upload.completed_at
         
         if upload.metrics:
@@ -98,7 +104,7 @@ class PostgresUploadRepository(IUploadRepository):
         limit: int = 100
     ) -> List[Upload]:
         """List uploads for a tenant."""
-        from app.bulk_models import Upload as UploadModel
+        from app.models.bulk_models import Upload as UploadModel
         
         stmt = select(UploadModel).where(
             UploadModel.user_id == tenant_id.value
@@ -116,7 +122,7 @@ class PostgresUploadRepository(IUploadRepository):
 
     async def count_pending_by_tenant(self, tenant_id: TenantId) -> int:
         """Count pending uploads for a tenant."""
-        from app.bulk_models import Upload as UploadModel
+        from app.models.bulk_models import Upload as UploadModel
         
         stmt = select(func.count()).where(
             and_(
@@ -130,7 +136,7 @@ class PostgresUploadRepository(IUploadRepository):
 
     async def find_pending(self, limit: int = 1) -> List[Upload]:
         """Find pending uploads for processing."""
-        from app.bulk_models import Upload as UploadModel
+        from app.models.bulk_models import Upload as UploadModel
         
         stmt = select(UploadModel).where(
             UploadModel.status == UploadStatus.PENDING.value
@@ -188,7 +194,7 @@ class PostgresClusterRepository(IClusterRepository):
 
     async def create_batch(self, clusters: List[Cluster]) -> List[Cluster]:
         """Batch create clusters (optimized)."""
-        from app.bulk_models import Cluster as ClusterModel
+        from app.models.bulk_models import Cluster as ClusterModel
         
         cluster_models = []
         for cluster in clusters:
@@ -224,7 +230,7 @@ class PostgresClusterRepository(IClusterRepository):
 
     async def get_by_id(self, cluster_id: ClusterId) -> Optional[Cluster]:
         """Get cluster by ID."""
-        from app.bulk_models import Cluster as ClusterModel
+        from app.models.bulk_models import Cluster as ClusterModel
         
         stmt = select(ClusterModel).where(ClusterModel.cluster_uuid == cluster_id.value)
         result = await self.session.execute(stmt)
@@ -237,7 +243,7 @@ class PostgresClusterRepository(IClusterRepository):
 
     async def update(self, cluster: Cluster) -> Cluster:
         """Update an existing cluster."""
-        from app.bulk_models import Cluster as ClusterModel
+        from app.models.bulk_models import Cluster as ClusterModel
         
         stmt = select(ClusterModel).where(ClusterModel.cluster_uuid == cluster.id.value)
         result = await self.session.execute(stmt)
@@ -271,7 +277,7 @@ class PostgresClusterRepository(IClusterRepository):
         limit: int = 1000
     ) -> List[Cluster]:
         """List clusters for an upload."""
-        from app.bulk_models import Cluster as ClusterModel
+        from app.models.bulk_models import Cluster as ClusterModel
         
         stmt = select(ClusterModel).where(
             ClusterModel.upload_id == upload_id.value
@@ -289,8 +295,8 @@ class PostgresClusterRepository(IClusterRepository):
         limit: int = 100
     ) -> List[Cluster]:
         """List clusters for a tenant."""
-        from app.bulk_models import Cluster as ClusterModel
-        from app.bulk_models import Upload as UploadModel
+        from app.models.bulk_models import Cluster as ClusterModel
+        from app.models.bulk_models import Upload as UploadModel
         
         # Join with uploads to filter by tenant
         stmt = select(ClusterModel).join(
