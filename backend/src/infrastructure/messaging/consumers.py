@@ -30,6 +30,9 @@ from .event_bus import EventBus, Message
 logger = logging.getLogger(__name__)
 
 NOTIFICATION_CONSUMER = "upload_notifications"
+# Second, independent consumer of UPLOAD_COMPLETED. Its own name means the
+# inbox dedups it separately from the notification consumer.
+WAREHOUSE_CONSUMER = "warehouse_loader"
 
 
 def _claim_event(
@@ -171,6 +174,91 @@ async def handle_upload_failed(message: Message) -> None:
     )
 
 
+async def handle_upload_completed_warehouse(message: Message) -> None:
+    """
+    Mirror a finished upload into the BigQuery warehouse.
+
+    Why this is a SECOND consumer on the same event rather than a step at
+    the end of the pipeline:
+
+      - The request path stays fast and stays correct. A warehouse load is
+        analytics, not part of "did this upload succeed" — a BigQuery
+        outage must not fail a user's upload or roll back their clusters.
+      - It gets its own retry budget. Kafka redelivers this handler without
+        re-running clustering, which inline code could not offer.
+      - The inbox already supports it: the processed_events primary key is
+        (event_id, consumer_name) precisely so several consumers can each
+        handle one event exactly once. This claims under its own name, so
+        it neither blocks nor is blocked by the notification consumer.
+
+    Skipped cleanly when GCP is not configured, so this is inert by default
+    and the pipeline behaves exactly as before unless GCP_PROJECT_ID is set.
+    """
+    from app.core.config import Config
+
+    payload = message.payload or {}
+    upload_id = payload.get("upload_id")
+    if upload_id is None:
+        logger.warning(f"UPLOAD_COMPLETED {message.id} has no upload_id; skipping warehouse load")
+        return
+    upload_id = int(upload_id)
+
+    if not Config.GCP_PROJECT_ID:
+        logger.debug(
+            f"GCP_PROJECT_ID unset — skipping warehouse load for upload {upload_id}"
+        )
+        return
+
+    # Claimed under this consumer's own name; a redelivery is a no-op.
+    if not _claim_event(
+        message.id, WAREHOUSE_CONSUMER, message.event_type, upload_id
+    ):
+        logger.info(
+            f"Event {message.id} (upload {upload_id}) already warehoused — skipping"
+        )
+        return
+
+    try:
+        from sqlmodel import Session, select
+
+        from app.database.database import engine
+        from app.models.bulk_models import Cluster as ClusterModel
+        from app.models.bulk_models import Upload as UploadModel
+        from src.infrastructure.warehouse.bigquery_sink import BigQueryWarehouseSink
+
+        sink = BigQueryWarehouseSink(
+            project_id=Config.GCP_PROJECT_ID,
+            dataset=Config.BIGQUERY_DATASET,
+            location=Config.BIGQUERY_LOCATION,
+        )
+        sink.ensure_schema()
+
+        with Session(engine) as session:
+            upload = session.get(UploadModel, upload_id)
+            if upload is None:
+                logger.warning(f"Upload {upload_id} vanished; nothing to warehouse")
+                return
+            clusters = list(
+                session.exec(select(ClusterModel).where(ClusterModel.upload_id == upload_id))
+            )
+
+        rows = sink.load_clusters(upload, clusters)
+        logger.info(
+            f"Warehoused upload {upload_id}: {rows} cluster rows -> "
+            f"{Config.GCP_PROJECT_ID}.{Config.BIGQUERY_DATASET}"
+        )
+
+    except Exception as e:
+        # Left claimed on purpose: a partially-completed load job re-run by a
+        # redelivery would risk double-counting in the dbt regression model,
+        # which is worse than a gap. Backfill deliberately via the Airflow DAG,
+        # which is idempotent per upload_id.
+        logger.error(
+            f"Warehouse load failed for upload {upload_id} (non-fatal, upload still OK): {e}",
+            exc_info=True,
+        )
+
+
 async def register_consumers(bus: EventBus) -> None:
     """
     Subscribe every consumer and start the bus.
@@ -188,6 +276,11 @@ async def register_consumers(bus: EventBus) -> None:
     )
     await bus.message_queue.subscribe(
         EventType.UPLOAD_FAILED.value, handle_upload_failed
+    )
+    # Same event, different consumer: notification and warehouse load are
+    # independent and must not be able to starve each other.
+    await bus.message_queue.subscribe(
+        EventType.UPLOAD_COMPLETED.value, handle_upload_completed_warehouse
     )
 
     await bus.start()
