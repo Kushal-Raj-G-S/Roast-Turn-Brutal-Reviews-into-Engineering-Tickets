@@ -8,18 +8,19 @@ from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.database.auth_supabase import get_current_user
-from src.bootstrap import bootstrap_application, ApplicationConfig
-from src.infrastructure.dependency_injection import DependencyContainer
-from src.domain.entities import Upload as UploadEntity
-from src.domain.value_objects import UploadId, TenantId, UploadStatus
+from app.models.models_supabase import Profile
 from src.application.use_cases.bulk_processing_pipeline import BulkProcessingPipeline
-from src.infrastructure.persistence.repositories import PostgresUploadRepository, PostgresClusterRepository
+from src.bootstrap import ApplicationConfig, bootstrap_application
+from src.domain.entities import Upload as UploadEntity
+from src.domain.value_objects import TenantId, UploadId, UploadStatus
+from src.infrastructure.dependency_injection import DependencyContainer
+from src.infrastructure.persistence.repositories import PostgresClusterRepository, PostgresUploadRepository
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ async def get_cluster_repository(session: AsyncSession = Depends(get_session)) -
 async def upload_csv_v2(
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: Profile = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
     upload_repo: PostgresUploadRepository = Depends(get_upload_repository)
 ):
@@ -65,7 +66,7 @@ async def upload_csv_v2(
     - Pluggable services
     """
     try:
-        user_id = UUID(current_user["id"])
+        user_id = current_user.id
         tenant_id = TenantId(user_id)
         
         # Validate file
@@ -86,6 +87,19 @@ async def upload_csv_v2(
         upload_dir.mkdir(parents=True, exist_ok=True)
         
         # Create domain entity
+        #
+        # NOT UploadStatus.PENDING. app/workers/bulk_worker.py polls for
+        # exactly `status == "pending"` as a safety net for uploads created
+        # outside the v1 route (its docstring says it "never finds any jobs
+        # to process in the current architecture" — because v1 uses
+        # 'shadow_processing'). A v2 upload left as 'pending' looks precisely
+        # like that orphan case, so the v1 worker claimed it and ran the
+        # WHOLE v1 pipeline over the same file in parallel with v2's.
+        #
+        # Observed on upload 87: 22 cluster rows for one 17-review file --
+        # v2's 16 plus v1's 6 -- and the UI reporting "28 total reviews".
+        # Writing PROCESSING at insert closes the race entirely rather than
+        # narrowing it: there is never a moment where the row is claimable.
         upload_entity = UploadEntity(
             id=None,  # Will be assigned by repo
             tenant_id=tenant_id,
@@ -93,7 +107,7 @@ async def upload_csv_v2(
             filename=file.filename,
             file_size_bytes=file_size,
             file_path="",  # Will be set after saving
-            status=UploadStatus.PENDING
+            status=UploadStatus.PROCESSING
         )
         
         # Save to database
@@ -196,7 +210,7 @@ async def process_upload_v2(upload_id: UploadId, session: AsyncSession):
 @router.get("/uploads/{upload_id}/progress")
 async def get_upload_progress_v2(
     upload_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: Profile = Depends(get_current_user),
     upload_repo: PostgresUploadRepository = Depends(get_upload_repository)
 ):
     """Get upload progress (v2)."""
@@ -207,7 +221,7 @@ async def get_upload_progress_v2(
             raise HTTPException(404, "Upload not found")
         
         # Verify ownership
-        user_id = UUID(current_user["id"])
+        user_id = current_user.id
         if upload.user_id != user_id:
             raise HTTPException(403, "Access denied")
         
@@ -243,7 +257,7 @@ async def get_upload_progress_v2(
 @router.get("/uploads/{upload_id}/clusters")
 async def get_upload_clusters_v2(
     upload_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: Profile = Depends(get_current_user),
     upload_repo: PostgresUploadRepository = Depends(get_upload_repository),
     cluster_repo: PostgresClusterRepository = Depends(get_cluster_repository)
 ):
@@ -254,7 +268,7 @@ async def get_upload_clusters_v2(
         if not upload:
             raise HTTPException(404, "Upload not found")
         
-        user_id = UUID(current_user["id"])
+        user_id = current_user.id
         if upload.user_id != user_id:
             raise HTTPException(403, "Access denied")
         
@@ -320,4 +334,4 @@ async def health_check_v2():
 
 
 # Import required for type hints
-from src.domain.services import IEmbeddingProvider, IClusteringEngine, IRankingStrategy
+from src.domain.services import IClusteringEngine, IEmbeddingProvider, IRankingStrategy

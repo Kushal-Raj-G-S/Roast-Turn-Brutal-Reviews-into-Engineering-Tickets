@@ -27,11 +27,19 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # Local env files
+#
+# The explicit list below only covered the exact names it names, so a
+# sidecar like `.env.bak-e2etest` (a hand-made backup taken before editing
+# .env) was NOT ignored and got picked up by `git add -A`. GitHub's push
+# protection rejected the push, which is the only reason it did not land.
+# The wildcard closes that: anything `.env.<something>` is ignored unless
+# it is explicitly an example/template.
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
 
 # Vercel
 .vercel

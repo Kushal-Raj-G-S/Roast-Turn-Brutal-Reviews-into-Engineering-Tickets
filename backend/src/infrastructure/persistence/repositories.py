@@ -4,16 +4,50 @@ Concrete implementations of domain repository interfaces using SQLAlchemy.
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
-from datetime import datetime
-from sqlalchemy import select, and_, func
+
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...domain.repositories import IUploadRepository, IClusterRepository
-from ...domain.entities import Upload, Cluster
-from ...domain.value_objects import UploadId, ClusterId, TenantId, UploadStatus, ClusterStatus
+from ...domain.entities import Cluster, Upload
+from ...domain.repositories import IClusterRepository, IUploadRepository
+from ...domain.value_objects import ClusterId, ClusterStatus, TenantId, UploadId, UploadStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """
+    Tag a naive datetime as UTC before it crosses into asyncpg.
+
+    The domain entities default their timestamps to datetime.utcnow(), which
+    is naive-but-actually-UTC, and that convention is used codebase-wide (see
+    the DTZ003 exemption in ruff.toml) so it is not ours to change here.
+
+    The problem is only at this boundary. These repositories run on asyncpg,
+    and asyncpg interprets a naive datetime as CLIENT-LOCAL before writing to
+    timestamptz — so a UTC instant gets relabelled as IST and stored 5h30m in
+    the past. psycopg2, which the v1 path uses, assumes UTC and is unaffected,
+    which is why the same upload ended up with two different created_at values
+    depending on which pipeline wrote its rows.
+
+    Measured against the live database: naive utcnow vs aware UTC written via
+    asyncpg landed 19800 seconds apart. Converting here fixes the async path
+    without touching the domain layer's convention.
+
+    APPLY ONLY TO created_at. Introspecting the models shows created_at is the
+    only DateTime(timezone=True) column on every table; completed_at,
+    updated_at, assigned_at, resolved_at, regression_resolved_at, review_date
+    and generated_at are all naive. Handing an aware datetime to a naive
+    column fails outright -- asyncpg raises
+    "can't subtract offset-naive and offset-aware datetimes" and the whole
+    transaction rolls back, which is how an over-broad version of this fix
+    left upload 89 stuck in 'processing' with its clusters already written.
+    """
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
 class PostgresUploadRepository(IUploadRepository):
@@ -34,7 +68,7 @@ class PostgresUploadRepository(IUploadRepository):
             file_size_bytes=upload.file_size_bytes,
             total_reviews=0,
             status=upload.status.value,
-            created_at=upload.created_at
+            created_at=_as_utc(upload.created_at)
         )
         
         self.session.add(upload_model)
@@ -216,7 +250,7 @@ class PostgresClusterRepository(IClusterRepository):
                 review_count=cluster.metrics.review_count if cluster.metrics else 0,
                 assigned_to=cluster.assigned_to,
                 assigned_at=cluster.assigned_at,
-                created_at=cluster.created_at,
+                created_at=_as_utc(cluster.created_at),
                 updated_at=cluster.updated_at,
                 resolved_at=cluster.resolved_at
             )
@@ -257,6 +291,9 @@ class PostgresClusterRepository(IClusterRepository):
         cluster_model.assigned_to = cluster.assigned_to
         cluster_model.assigned_at = cluster.assigned_at
         cluster_model.resolved_at = cluster.resolved_at
+        # Aware UTC, not utcnow(): this repository runs on asyncpg, which
+        # reads a naive datetime as client-local and would shift it by the
+        # local offset (measured: 5.5h) before storing into timestamptz.
         cluster_model.updated_at = datetime.utcnow()
         
         if cluster.ai_analyzed:
@@ -331,8 +368,8 @@ class PostgresClusterRepository(IClusterRepository):
 
     def _to_domain(self, model) -> Cluster:
         """Convert SQLModel to domain entity."""
-        from ...domain.value_objects import ClusterMetrics, Severity, ClusterStatus
         from ...domain.entities import Cluster
+        from ...domain.value_objects import ClusterMetrics, ClusterStatus, Severity
         
         metrics = ClusterMetrics(
             review_count=model.review_count,

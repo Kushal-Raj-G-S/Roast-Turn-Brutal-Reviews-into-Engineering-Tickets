@@ -3,12 +3,33 @@ Database models for bulk review processing (optimized system).
 Uses the 'uploads' and 'clusters' tables created in Supabase.
 """
 
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlmodel import Field, SQLModel, create_engine, Session, select
-from sqlalchemy import Column, DateTime, func, Integer, JSON
+from sqlalchemy import JSON, Column, DateTime, Integer, func
+from sqlmodel import Field, Session, SQLModel, create_engine, select
+
+
+def _utc_now() -> datetime:
+    """
+    Timezone-AWARE UTC, deliberately not datetime.utcnow().
+
+    These columns are DateTime(timezone=True) i.e. timestamptz, and the two
+    drivers in this codebase disagree about naive input:
+
+      psycopg2 (v1, sync)  -> treats a naive datetime as UTC. Correct here.
+      asyncpg  (v2, async) -> treats a naive datetime as CLIENT-LOCAL, so
+                              datetime.utcnow() gets relabelled as IST and
+                              shifted back 5h30m before storage.
+
+    Measured against the live database: naive utcnow and aware UTC written
+    through asyncpg landed 19800s (5.5h) apart. That is why one upload's
+    clusters carried two different created_at values depending on which
+    pipeline wrote them, which would silently skew every time-bucketed dbt
+    model. An aware datetime is unambiguous to both drivers.
+    """
+    return datetime.now(timezone.utc)
 
 
 class Upload(SQLModel, table=True):
@@ -31,7 +52,7 @@ class Upload(SQLModel, table=True):
     processing_time_ms: Optional[int] = Field(default=None)
     processing_time_seconds: Optional[float] = Field(default=None)
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=_utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     completed_at: Optional[datetime] = Field(default=None)
@@ -85,7 +106,7 @@ class Cluster(SQLModel, table=True):
     regression_resolved_at: Optional[datetime] = Field(default=None)  # when the ORIGINAL cluster was marked resolved
     
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=_utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
     updated_at: Optional[datetime] = Field(default=None)
@@ -109,7 +130,7 @@ class SeverityExplanation(SQLModel, table=True):
     explanation: Optional[str] = Field(default=None)
     generated_at: Optional[datetime] = Field(default=None)
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=_utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
@@ -133,7 +154,7 @@ class PushSubscription(SQLModel, table=True):
     p256dh: str
     auth: str
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=_utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
@@ -152,7 +173,7 @@ class Review(SQLModel, table=True):
     device: Optional[str] = Field(default=None)
     review_date: Optional[datetime] = Field(default=None)
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=_utc_now,
         sa_column=Column(DateTime(timezone=True), server_default=func.now())
     )
 
