@@ -11,7 +11,7 @@ from sqlmodel import create_engine
 from app.models.bulk_models import init_db, get_engine
 from app.api.bulk_routes import router as bulk_router, get_db_session
 from app.workers.bulk_worker import start_worker, stop_worker
-from app.core.config import config
+from app.core.config import config, redact_url
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def init_bulk_api(app: FastAPI):
     global engine
     
     # Create database engine
-    logger.info(f"Initializing database: {config.DATABASE_URL}")
+    logger.info(f"Initializing database: {redact_url(config.DATABASE_URL)}")
     engine = get_engine(config.DATABASE_URL)
     
     # Create tables

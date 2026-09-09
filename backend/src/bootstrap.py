@@ -5,6 +5,7 @@ Wires up all components for production deployment.
 
 import logging
 import os
+import re
 from typing import Optional
 
 from src.infrastructure.dependency_injection import DependencyContainer, ServiceLifetime
@@ -22,6 +23,18 @@ from src.domain.services import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _redact_dsn(url: Optional[str]) -> str:
+    """
+    Strip the password out of a connection URL before logging it.
+
+    Defined here rather than imported from app.core.config because src/ and
+    app/ are separate trees; duplicating six lines beats coupling them.
+    """
+    if not url:
+        return "(unset)"
+    return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", url)
 
 
 class ApplicationConfig:
@@ -262,7 +275,9 @@ def bootstrap_application() -> DependencyContainer:
     
     logger.info("🚀 Bootstrapping Roast Review Intelligence Platform")
     logger.info(f"Environment Configuration:")
-    logger.info(f"  - Database: {config.DATABASE_URL[:30]}...")
+    # Redact, don't truncate: url[:30] only hid the password here by luck —
+    # a shorter host or username would have pushed it inside the cut.
+    logger.info(f"  - Database: {_redact_dsn(config.DATABASE_URL)}")
     logger.info(f"  - Embedding Provider: {config.EMBEDDING_PROVIDER}")
     logger.info(f"  - Vector Backend: {config.VECTOR_BACKEND}")
     logger.info(f"  - Clustering Engine: {config.CLUSTERING_ENGINE}")

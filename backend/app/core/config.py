@@ -4,10 +4,27 @@ Loads settings from environment variables with sensible defaults.
 """
 
 import os
+import re
 from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def redact_url(url: Optional[str]) -> str:
+    """
+    Strip credentials out of a connection URL before it is logged.
+
+    Never log a DSN directly. DATABASE_URL carries the Postgres password in
+    its userinfo section, so an f-string of it puts the live credential into
+    stdout, into whatever aggregates those logs, and into CI output where it
+    is readable by anyone with build access. Truncating the string (e.g.
+    url[:30]) is not a fix — whether the password is exposed then depends on
+    how long the host and username happen to be.
+    """
+    if not url:
+        return "(unset)"
+    return re.sub(r"://([^:/@]+):[^@]*@", r"://\1:***@", url)
 
 class Config:
     """Configuration for bulk review processing."""
