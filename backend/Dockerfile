@@ -84,10 +84,16 @@ USER roast
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD curl -fsS http://localhost:8000/health || exit 1
+    CMD curl -fsS "http://localhost:${PORT:-8000}/health" || exit 1
 
 # Single uvicorn worker per container: replica count is Kubernetes' job
 # (see the HPA), and multiple workers each loading the embedding model
 # would multiply memory per pod for no throughput gain on a CPU-bound
 # workload.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+#
+# Bind $PORT, not a fixed 8000: Heroku (and most PaaS) assign the port
+# dynamically at runtime and kill the dyno at boot if the process doesn't
+# listen on it (Heroku R10). Locally $PORT is unset, so we fall back to
+# 8000. Shell form is required so ${PORT} actually expands — exec form
+# would pass the literal string "$PORT" to uvicorn.
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1

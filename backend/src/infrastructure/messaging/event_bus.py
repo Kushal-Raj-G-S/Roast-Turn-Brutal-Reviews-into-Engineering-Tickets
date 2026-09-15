@@ -80,16 +80,40 @@ class InMemoryQueue(IMessageQueue):
         self.max_size = max_size
         self.is_consuming = False
         self._consumer_tasks: List[asyncio.Task] = []
+        self._dropped = 0
 
     async def publish(self, message: Message) -> None:
-        """Publish message to all relevant queues."""
+        """
+        Publish a message to its event-type queue.
+
+        Non-blocking and bounded. The original `await queue.put(...)` blocks
+        the caller once a bounded queue fills — and with no consumer draining
+        it (the default: EVENT_CONSUMERS_ENABLED=false), it fills to max_size
+        and then blocks *forever*, hanging the upload background task that
+        publishes a stage event per stage. Best-effort telemetry must never
+        do that: if the queue is full we drop the event and warn (throttled)
+        rather than wait for a drain that may never come. When a consumer IS
+        running it drains far faster than uploads publish, so the queue never
+        fills and nothing is dropped.
+        """
         event_type = message.event_type
-        
-        # Create queue if doesn't exist
-        if event_type not in self.queues:
-            self.queues[event_type] = asyncio.Queue(maxsize=self.max_size)
-        
-        await self.queues[event_type].put(message)
+
+        queue = self.queues.get(event_type)
+        if queue is None:
+            queue = asyncio.Queue(maxsize=self.max_size)
+            self.queues[event_type] = queue
+
+        try:
+            queue.put_nowait(message)
+        except asyncio.QueueFull:
+            self._dropped += 1
+            if self._dropped == 1 or self._dropped % 100 == 0:
+                logger.warning(
+                    f"InMemoryQueue '{event_type}' full (max_size={self.max_size}); "
+                    f"dropped {self._dropped} event(s) so far — is a consumer running? "
+                    f"(dropped id={message.id})"
+                )
+            return
         logger.debug(f"Published message {message.id} to queue {event_type}")
 
     async def subscribe(
