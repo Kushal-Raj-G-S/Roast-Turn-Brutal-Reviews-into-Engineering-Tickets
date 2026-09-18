@@ -476,6 +476,20 @@ class BulkProcessor:
 
         # Issue-vs-generic reference axis (same embedding space as reviews).
         refs = self._issue_reference_centroids()
+        # Guard: issue-specificity dot products (below) require the seed
+        # centroids to live in the SAME dimension as the review embeddings.
+        # The TF-IDF fallback tier sizes its SVD by sample count, so 10 seeds
+        # yield fewer dims than hundreds of reviews (e.g. 9 vs 384) — the
+        # matmul would then crash and fail the whole upload. Drop the term
+        # instead. (NVIDIA/local tiers share one fixed dim, so this only bites
+        # the fallback path.)
+        if refs is not None and refs[0].shape[0] != norm_emb.shape[1]:
+            logger.warning(
+                f"Issue-specificity disabled: seed dim {refs[0].shape[0]} != "
+                f"review embedding dim {norm_emb.shape[1]} (embedding fell back "
+                f"to a sample-sized tier)"
+            )
+            refs = None
 
         # Analyze all clusters and calculate priority scores
         cluster_metadata = []

@@ -87,13 +87,36 @@ _NVIDIA_MODELS = [
 ]
 
 
+def _run_coro_blocking(coro):
+    """Run an async coroutine to completion from sync code, safely.
+
+    asyncio.run() raises "cannot be called from a running event loop" when the
+    caller is already inside one — which is exactly the case here: bulk
+    processing is invoked from FastAPI's async request path / the shadow
+    orchestrator. Without this, every NVIDIA embed call threw and silently fell
+    back to TF-IDF, so the hosted embeddings were never actually used. When a
+    loop is already running we execute the coroutine on a dedicated worker
+    thread with its own loop; otherwise we just asyncio.run() it directly.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)  # no running loop in this thread — safe
+
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(lambda: asyncio.run(coro)).result()
+
+
 def _nvidia_encode_batch(texts: List[str]) -> np.ndarray:
     """
     Tier-0 premium: embed the whole batch via NVIDIA's API (key rotation +
     model fallback + truncation live in NvidiaEmbeddingProvider). Raises on
     any incomplete result so encode_batch can fall back as a whole.
     """
-    import asyncio
     from src.infrastructure.embeddings.providers import NvidiaEmbeddingProvider
 
     provider = NvidiaEmbeddingProvider(
@@ -103,7 +126,7 @@ def _nvidia_encode_batch(texts: List[str]) -> np.ndarray:
         concurrency=16,
         cache_enabled=False,
     )
-    vecs = asyncio.run(provider.embed_batch(list(texts)))
+    vecs = _run_coro_blocking(provider.embed_batch(list(texts)))
     if any(v is None for v in vecs):
         raise RuntimeError("NVIDIA embedding returned incomplete results")
     return np.asarray([v.values for v in vecs], dtype="float32")
