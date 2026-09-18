@@ -279,14 +279,7 @@ class BigQueryWarehouseSink:
         table_id = self._table_id("reviews")
 
         # Delete-then-load = idempotent replace for this upload's partition slice.
-        client.query(
-            f"DELETE FROM `{table_id}` WHERE upload_id = @upload_id",  # noqa: S608 - identifier validated, value parameterized
-            job_config=bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("upload_id", "INT64", upload_id)
-                ]
-            ),
-        ).result()
+        self._delete_upload_rows(table_id, upload_id)
 
         job_config = bigquery.LoadJobConfig(
             source_format=bigquery.SourceFormat.PARQUET,
@@ -296,6 +289,35 @@ class BigQueryWarehouseSink:
             # doesn't store — ignore them rather than failing the load.
             ignore_unknown_values=True,
         )
+
+        # Local emulator only: goccy/bigquery-emulator nil-pointer-crashes on
+        # Parquet load jobs (both load_table_from_uri and load_table_from_file),
+        # then the client retries the 500 until it times out. Gated behind
+        # BIGQUERY_EMULATOR_HOST so production is untouched — it still uses the
+        # free GCS load job below. We download the same staged Parquet via the
+        # storage client (which honors STORAGE_EMULATOR_HOST) and stream the
+        # rows in with insert_rows_json, the one write API this emulator
+        # handles reliably (also used for upload_metrics). Streaming is fine
+        # locally: no billing/quota, and the demo dataset is small.
+        if os.getenv("BIGQUERY_EMULATOR_HOST"):
+            import io
+
+            import pandas as pd
+            from google.cloud import storage
+
+            bucket_name, _, blob_path = gcs_uri[len("gs://"):].partition("/")
+            blob = storage.Client(project=self.project_id).bucket(bucket_name).blob(blob_path)
+            df = pd.read_parquet(io.BytesIO(blob.download_as_bytes()))
+            keep = [name for name, _ in REVIEWS_SCHEMA if name in df.columns]
+            df = df[keep].copy()
+            if "upload_id" not in df.columns:
+                df["upload_id"] = upload_id
+            if "ingested_at" not in df.columns:
+                df["ingested_at"] = datetime.utcnow()
+            rows = self._df_to_json_rows(df)
+            n = self._stream_json_rows(table_id, rows)
+            logger.info(f"Streamed {n} rows -> {table_id} (emulator)")
+            return n
 
         load_job = client.load_table_from_uri(
             gcs_uri, table_id, job_config=job_config, location=self.location
@@ -394,14 +416,16 @@ class BigQueryWarehouseSink:
         client = self._get_client()
         table_id = self._table_id("clusters")
 
-        client.query(
-            f"DELETE FROM `{table_id}` WHERE upload_id = @upload_id",  # noqa: S608 - identifier validated, value parameterized
-            job_config=bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("upload_id", "INT64", upload_id)
-                ]
-            ),
-        ).result()
+        self._delete_upload_rows(table_id, upload_id)
+
+        # Emulator: stream instead of a Parquet load job (see the note in
+        # load_reviews_from_gcs — goccy crashes on load jobs). Production falls
+        # through to the load job below.
+        if os.getenv("BIGQUERY_EMULATOR_HOST"):
+            json_rows = self._df_to_json_rows(pd.DataFrame.from_records(rows))
+            n = self._stream_json_rows(table_id, json_rows)
+            logger.info(f"Streamed {n} clusters -> {table_id} (emulator)")
+            return n
 
         buffer = io.BytesIO()
         pd.DataFrame.from_records(rows).to_parquet(buffer, engine="pyarrow", index=False)
@@ -418,6 +442,70 @@ class BigQueryWarehouseSink:
         result = load_job.result()
         logger.info(f"Loaded {result.output_rows} clusters -> {table_id}")
         return result.output_rows or 0
+
+    def _delete_upload_rows(self, table_id: str, upload_id) -> None:
+        """Idempotent replace: delete this upload's rows before a (re)load.
+
+        Skipped on the local emulator: goccy/bigquery-emulator nil-pointer-
+        crashes on DELETE DML (then the client retries the 500 until it times
+        out). The emulator's tables are ephemeral in-memory and start empty per
+        run, so there is nothing to delete there anyway. Production keeps the
+        real delete-then-load idempotency.
+        """
+        if os.getenv("BIGQUERY_EMULATOR_HOST"):
+            return
+        from google.cloud import bigquery
+
+        client = self._get_client()
+        client.query(
+            f"DELETE FROM `{table_id}` WHERE upload_id = @upload_id",  # noqa: S608 - identifier validated, value parameterized
+            job_config=bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("upload_id", "INT64", upload_id)
+                ]
+            ),
+        ).result()
+
+    @staticmethod
+    def _df_to_json_rows(df) -> List[dict]:
+        """Coerce a DataFrame into insert_rows_json-safe dicts.
+
+        Timestamps -> ISO strings, NaN/NaT -> None, numpy scalars -> Python
+        scalars. Used only by the emulator streaming path.
+        """
+        import math
+
+        import pandas as pd
+
+        records = df.to_dict(orient="records")
+        clean: List[dict] = []
+        for rec in records:
+            out = {}
+            for k, v in rec.items():
+                if isinstance(v, pd.Timestamp):
+                    out[k] = None if pd.isna(v) else v.isoformat()
+                elif isinstance(v, float) and math.isnan(v):
+                    out[k] = None
+                elif v is None or (not isinstance(v, (list, dict)) and pd.isna(v)):
+                    out[k] = None
+                elif hasattr(v, "item"):  # numpy scalar
+                    out[k] = v.item()
+                else:
+                    out[k] = v
+            clean.append(out)
+        return clean
+
+    def _stream_json_rows(self, table_id: str, rows: List[dict], chunk: int = 500) -> int:
+        """insert_rows_json in chunks; raises on any row error. Emulator path."""
+        client = self._get_client()
+        total = 0
+        for i in range(0, len(rows), chunk):
+            batch = rows[i:i + chunk]
+            errors = client.insert_rows_json(table_id, batch)
+            if errors:
+                raise RuntimeError(f"streaming insert failed ({table_id}): {errors[:3]}")
+            total += len(batch)
+        return total
 
     def load_upload_metrics(
         self,
@@ -439,16 +527,17 @@ class BigQueryWarehouseSink:
 
         # Idempotent: a DAG retry replaces this run's row rather than
         # double-counting it in the regression model.
-        client.query(
-            f"DELETE FROM `{table_id}` "  # noqa: S608 - identifier validated, values parameterized
-            f"WHERE upload_id = @upload_id AND pipeline_version = @pv",
-            job_config=bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("upload_id", "INT64", upload_id),
-                    bigquery.ScalarQueryParameter("pv", "STRING", pipeline_version),
-                ]
-            ),
-        ).result()
+        if not os.getenv("BIGQUERY_EMULATOR_HOST"):
+            client.query(
+                f"DELETE FROM `{table_id}` "  # noqa: S608 - identifier validated, values parameterized
+                f"WHERE upload_id = @upload_id AND pipeline_version = @pv",
+                job_config=bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("upload_id", "INT64", upload_id),
+                        bigquery.ScalarQueryParameter("pv", "STRING", pipeline_version),
+                    ]
+                ),
+            ).result()
 
         row = {
             "upload_id": upload_id,
