@@ -687,6 +687,28 @@ class RealShadowOrchestrator:
         sample_rate = float(os.getenv("SHADOW_V2_SAMPLE_RATE", "0") or 0)
         run_v2 = v2_enabled or (sample_rate > 0 and random.random() < sample_rate)
 
+        # Hard size guard: v2 re-runs the full embedding+clustering pipeline from
+        # scratch, so on a large upload it doubles both peak memory and the
+        # number of NVIDIA embedding calls. That doubling is what pushes a
+        # constrained box toward OOM. Above this many kept reviews we skip v2
+        # unconditionally -- even when it's explicitly enabled or sampled --
+        # because re-validating the architecture is not worth risking the actual
+        # upload the user is waiting on. Small uploads still run v2 (cheap).
+        # v1 has already run at this point, so v1_output has the real count.
+        max_v2_reviews = int(os.getenv("SHADOW_V2_MAX_REVIEWS", "20000") or 20000)
+        kept_reviews = int(
+            v1_output.get("kept_reviews")
+            or v1_output.get("total_reviews")
+            or 0
+        )
+        if run_v2 and max_v2_reviews > 0 and kept_reviews > max_v2_reviews:
+            logger.info(
+                f"[{correlation_id}] v2 skipped: {kept_reviews} reviews exceeds "
+                f"SHADOW_V2_MAX_REVIEWS={max_v2_reviews} -- avoiding a second "
+                f"full embedding pass on a large upload"
+            )
+            run_v2 = False
+
         if run_v2:
             # Step 2: Execute v2 asynchronously (non-blocking)
             logger.info(f"[{correlation_id}] Step 2: v2 async execution")
