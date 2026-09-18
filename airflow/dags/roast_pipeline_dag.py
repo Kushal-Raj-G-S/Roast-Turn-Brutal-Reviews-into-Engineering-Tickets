@@ -9,23 +9,44 @@ failure in the clustering stage re-runs the embedding of the whole batch,
 there's no backfillable/schedulable entry point, and retry behaviour is
 whatever try/except each method happens to have.
 
-This DAG does not reimplement pipeline logic. It calls the SAME stage
-methods as discrete Airflow tasks so Airflow's retry/backoff and per-task
-state take over: a failed embedding stage retries only that stage, a run
-can be re-triggered for a specific upload_id, and every stage's duration
-is visible in the UI.
+This DAG does not reimplement pipeline logic. Each task shells out to
+backend/scripts/airflow_stage_runner.py, which calls the SAME stage methods
+BulkProcessingPipeline already has -- just from its own process, not
+Airflow's. Airflow's retry/backoff and per-task state still take over: a
+failed embedding stage retries only that stage, a run can be re-triggered
+for a specific upload_id, and every stage's duration is visible in the UI.
+
+WHY A SUBPROCESS, NOT A DIRECT PYTHON IMPORT (PythonOperator):
+    Confirmed by testing, not a guess -- Airflow 2.10.5's own ORM models
+    require SQLAlchemy 1.4 (its TaskInstance model raises
+    MappedAnnotationError under 2.0's stricter mapping rules). This
+    backend's SQLModel-based models require SQLAlchemy 2.0 the same way
+    (`cannot import name 'DOUBLE' from sqlalchemy.types` under 1.4). Two
+    libraries needing opposite major versions of one dependency cannot
+    share a process. A small compat shim fixed one such clash
+    (async_sessionmaker) but SQLModel's need for 2.0 goes deeper than one
+    name -- so backend code runs in its OWN process/environment (the same
+    one FastAPI itself runs in) via BashOperator, never imported into
+    Airflow's interpreter at all. See infra/docker/Dockerfile.airflow for
+    the two-venv image this runs in locally (Airflow isolated in its own
+    venv; backend code via the base image's Python, which has the
+    backend's real, unconstrained dependency set).
 
 IMPORTANT — how data moves between tasks:
     Payloads are NOT passed through XCom. Airflow persists XCom values in
     its metadata database (48KB limit on the default backend); 200K
     reviews carrying 384-float embeddings is gigabytes and would fail
     outright. Each stage writes Parquet to GCS via GCSStagingStore and
-    passes only the gs:// URI through XCom. That also lets BigQuery load
-    the staged Parquet directly with a free batch load job.
+    passes only the gs:// URI through XCom -- airflow_stage_runner.py
+    prints it as the last line of stdout, which BashOperator's default
+    do_xcom_push=True captures as the task's XCom return_value. That also
+    lets BigQuery load the staged Parquet directly with a free batch load
+    job.
 
-Local run: `pip install apache-airflow` then `airflow standalone`
-(ships its own SQLite metadata DB — nothing external to install).
-In production this is what Cloud Composer runs unmodified.
+Local run: see infra/docker/Dockerfile.airflow's docstring-equivalent
+comments for the two-venv container this is built and tested against.
+In production this is what Cloud Composer runs, pointed at a proper
+Docker/KubernetesPodOperator image instead of a bare BashOperator.
 """
 
 from __future__ import annotations
@@ -33,7 +54,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow.operators.bash import BashOperator
 from airflow.utils.trigger_rule import TriggerRule
 
 default_args = {
@@ -45,7 +66,6 @@ default_args = {
     "depends_on_past": False,
 }
 
-# Stage name -> the XCom key holding its output URI
 STAGE_LOAD = "load_and_validate"
 STAGE_FILTER = "filter_noise"
 STAGE_SCORE = "score_actionability"
@@ -54,143 +74,39 @@ STAGE_CLUSTER = "cluster_and_rank"
 STAGE_WAREHOUSE = "load_warehouse"
 STAGE_CLEANUP = "cleanup_staging"
 
+# The Python that has the backend's real dependencies (SQLAlchemy 2.0,
+# SQLModel, torch, faiss, ...) -- the base image's interpreter, deliberately
+# NOT the venv `airflow` itself runs in. Override via env for other setups
+# (e.g. a Windows host running the DAG against a venv path instead).
+import os
 
-def _ensure_backend_on_path():
-    """The DAG process is separate from the FastAPI app, so it needs the
-    same sys.path entry the app gets from running uvicorn inside backend/."""
-    import sys
-    from pathlib import Path
+BACKEND_PYTHON = os.environ.get("ROAST_BACKEND_PYTHON", "python")
+RUNNER_SCRIPT = os.environ.get(
+    "ROAST_STAGE_RUNNER", "/opt/airflow/backend/scripts/airflow_stage_runner.py"
+)
+# The backend resolves some paths relative to its own root (e.g. an upload's
+# stored path like ./uploads/1.csv). BashOperator otherwise runs from a temp
+# cwd, so every stage runs with the backend root as its working directory.
+BACKEND_CWD = os.environ.get("ROAST_BACKEND_CWD", "/opt/airflow/backend")
 
-    backend_dir = str(Path(__file__).resolve().parents[2] / "backend")
-    if backend_dir not in sys.path:
-        sys.path.insert(0, backend_dir)
-
-
-def _staging_store():
-    from app.core.config import config
-    from src.infrastructure.warehouse.gcs_staging import GCSStagingStore
-
-    config.require_gcp()
-    return GCSStagingStore(
-        bucket=config.GCS_STAGING_BUCKET, project_id=config.GCP_PROJECT_ID
-    )
+_UPLOAD_ID = "{{ dag_run.conf['upload_id'] }}"
+_RUN_ID = "{{ run_id }}"
 
 
-async def _run_one_stage(stage_name: str, upload_id, run_id: str, ti) -> None:
-    """
-    Runs one named stage against a freshly-built pipeline, reading the
-    upstream stage's Parquet from GCS and writing this stage's output back.
-    Calls into BulkProcessingPipeline's existing stage methods unmodified.
-    """
-    from app.core.config import config
-    from app.core.pipeline_factory import build_bulk_pipeline
-
-    store = _staging_store()
-    raw_upload_id = upload_id.value
-
-    async with build_bulk_pipeline() as pipeline:
-        upload = await pipeline.upload_repo.get_by_id(upload_id)
-        if not upload:
-            raise ValueError(f"Upload {upload_id} not found")
-
-        def _pull(stage: str):
-            uri = ti.xcom_pull(task_ids=stage, key="staged_uri")
-            if not uri:
-                raise ValueError(f"No staged output found from upstream stage '{stage}'")
-            return store.read_reviews(uri)
-
-        def _push(reviews) -> None:
-            uri = store.write_reviews(reviews, raw_upload_id, run_id, stage_name)
-            ti.xcom_push(key="staged_uri", value=uri)
-            ti.xcom_push(key="review_count", value=len(reviews))
-
-        if stage_name == STAGE_LOAD:
-            reviews = await pipeline._load_and_validate_csv(upload)
-            _push(reviews)
-
-        elif stage_name == STAGE_FILTER:
-            reviews = await pipeline._filter_noise(upload, _pull(STAGE_LOAD))
-            _push(reviews)
-
-        elif stage_name == STAGE_SCORE:
-            reviews = _pull(STAGE_FILTER)
-            if pipeline.actionability_scorer:
-                reviews = await pipeline._score_actionability(upload, reviews)
-            _push(reviews)
-
-        elif stage_name == STAGE_EMBED:
-            reviews = await pipeline._generate_embeddings(upload, _pull(STAGE_SCORE))
-            _push(reviews)
-
-        elif stage_name == STAGE_CLUSTER:
-            reviews = _pull(STAGE_EMBED)
-            clusters = await pipeline._cluster_reviews(upload, reviews)
-            clusters = await pipeline._rank_clusters(upload, clusters)
-            saved = await pipeline._persist_clusters(upload, clusters)
-            ti.xcom_push(key="cluster_count", value=len(saved))
-
-        elif stage_name == STAGE_WAREHOUSE:
-            # Warehouse sync is its own task so a BigQuery failure never
-            # rolls back the user-facing Postgres write that already
-            # succeeded upstream.
-            from src.infrastructure.warehouse.bigquery_sink import BigQueryWarehouseSink
-
-            sink = BigQueryWarehouseSink(
-                project_id=config.GCP_PROJECT_ID,
-                dataset=config.BIGQUERY_DATASET,
-                location=config.BIGQUERY_LOCATION,
-            )
-            sink.ensure_schema()
-
-            # Load reviews straight from the staged Parquet — free batch
-            # load job, no re-serialization, idempotent per upload_id.
-            embed_uri = ti.xcom_pull(task_ids=STAGE_EMBED, key="staged_uri")
-            sink.load_reviews_from_gcs(embed_uri, raw_upload_id)
-
-            clusters = await pipeline.cluster_repo.list_by_upload(upload_id)
-            sink.load_clusters(upload, clusters)
-
-            if upload.metrics:
-                sink.load_upload_metrics(
-                    upload, upload.metrics, pipeline_version=config.PIPELINE_VERSION
-                )
-
-        else:
-            raise ValueError(f"Unknown stage: {stage_name}")
-
-
-def _run_stage(stage_name: str, **context):
-    """Task entrypoint: resolves upload_id from the DAG run config and runs the stage."""
-    import asyncio
-
-    upload_id_raw = context["dag_run"].conf.get("upload_id")
-    if upload_id_raw is None:
-        raise ValueError("DAG run must be triggered with {'upload_id': <id>} in conf")
-
-    _ensure_backend_on_path()
-    from src.domain.value_objects import UploadId
-
-    asyncio.run(
-        _run_one_stage(
-            stage_name,
-            UploadId(int(upload_id_raw)),
-            context["run_id"],
-            context["ti"],
-        )
-    )
-
-
-def _cleanup_staging(**context):
-    """
-    Delete this run's staged Parquet so successful runs don't accumulate
-    storage cost. Runs only when every upstream task succeeded — a failed
-    run keeps its artifacts for post-mortem inspection, which is the whole
-    point of staging to durable storage in the first place.
-    """
-    upload_id_raw = context["dag_run"].conf.get("upload_id")
-    _ensure_backend_on_path()
-    store = _staging_store()
-    store.cleanup_run(int(upload_id_raw), context["run_id"])
+def _cmd(stage: str, input_task: str | None = None, embed_task: str | None = None) -> str:
+    """Build the BashOperator command for one stage."""
+    parts = [
+        BACKEND_PYTHON,
+        RUNNER_SCRIPT,
+        "--stage", stage,
+        "--upload-id", _UPLOAD_ID,
+        "--run-id", _RUN_ID,
+    ]
+    if input_task:
+        parts += ["--input-uri", f"{{{{ ti.xcom_pull(task_ids='{input_task}') }}}}"]
+    if embed_task:
+        parts += ["--embed-uri", f"{{{{ ti.xcom_pull(task_ids='{embed_task}') }}}}"]
+    return " ".join(parts)
 
 
 with DAG(
@@ -204,49 +120,50 @@ with DAG(
     tags=["roast", "review-pipeline"],
 ) as dag:
 
-    load_and_validate = PythonOperator(
+    load_and_validate = BashOperator(
         task_id=STAGE_LOAD,
-        python_callable=_run_stage,
-        op_kwargs={"stage_name": STAGE_LOAD},
+        bash_command=_cmd(STAGE_LOAD),
+        cwd=BACKEND_CWD,
     )
 
-    filter_noise = PythonOperator(
+    filter_noise = BashOperator(
         task_id=STAGE_FILTER,
-        python_callable=_run_stage,
-        op_kwargs={"stage_name": STAGE_FILTER},
+        bash_command=_cmd(STAGE_FILTER, input_task=STAGE_LOAD),
+        cwd=BACKEND_CWD,
     )
 
-    score_actionability = PythonOperator(
+    score_actionability = BashOperator(
         task_id=STAGE_SCORE,
-        python_callable=_run_stage,
-        op_kwargs={"stage_name": STAGE_SCORE},
+        bash_command=_cmd(STAGE_SCORE, input_task=STAGE_FILTER),
+        cwd=BACKEND_CWD,
     )
 
-    generate_embeddings = PythonOperator(
+    generate_embeddings = BashOperator(
         task_id=STAGE_EMBED,
-        python_callable=_run_stage,
-        op_kwargs={"stage_name": STAGE_EMBED},
+        bash_command=_cmd(STAGE_EMBED, input_task=STAGE_SCORE),
         # The slow CPU-bound stage — give it room, and its own retry budget.
         execution_timeout=timedelta(hours=2),
         retries=5,
+        cwd=BACKEND_CWD,
     )
 
-    cluster_and_rank = PythonOperator(
+    cluster_and_rank = BashOperator(
         task_id=STAGE_CLUSTER,
-        python_callable=_run_stage,
-        op_kwargs={"stage_name": STAGE_CLUSTER},
+        bash_command=_cmd(STAGE_CLUSTER, input_task=STAGE_EMBED),
+        cwd=BACKEND_CWD,
     )
 
-    load_warehouse = PythonOperator(
+    load_warehouse = BashOperator(
         task_id=STAGE_WAREHOUSE,
-        python_callable=_run_stage,
-        op_kwargs={"stage_name": STAGE_WAREHOUSE},
+        bash_command=_cmd(STAGE_WAREHOUSE, embed_task=STAGE_EMBED),
+        cwd=BACKEND_CWD,
     )
 
-    cleanup_staging = PythonOperator(
+    cleanup_staging = BashOperator(
         task_id=STAGE_CLEANUP,
-        python_callable=_cleanup_staging,
+        bash_command=_cmd(STAGE_CLEANUP),
         trigger_rule=TriggerRule.ALL_SUCCESS,
+        cwd=BACKEND_CWD,
     )
 
     (

@@ -1,0 +1,54 @@
+# Airflow + the backend's ML stack in ONE image, via TWO fully isolated
+# Python environments -- not one shared interpreter.
+#
+# Why: airflow/dags/roast_pipeline_dag.py's tasks shell out to
+# backend/scripts/airflow_stage_runner.py rather than importing backend code
+# into Airflow's own process. Confirmed by testing (not a guess): Airflow
+# 2.10.5's own ORM models require SQLAlchemy 1.4 (MappedAnnotationError
+# under 2.0's stricter mapping), while this backend's SQLModel-based models
+# require SQLAlchemy 2.0 the same way (`cannot import name 'DOUBLE'` under
+# 1.4). A single shared environment cannot satisfy both. Two isolated venvs
+# means neither dependency set ever has to compromise for the other:
+#   - /opt/airflow-venv  -- apache-airflow only, its own pinned deps
+#   - the base image's Python -- backend/requirements.txt, unconstrained,
+#     identical to what backend/Dockerfile ships to production
+#
+# This image is for LOCAL DEMO use only (running Airflow standalone inside
+# Docker Desktop's Linux VM, since Airflow's standalone command does not run
+# on native Windows at all -- confirmed by testing, not just its own
+# warning). It is not what backend/Dockerfile ships to production.
+
+FROM python:3.12-slim
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PYTHONUNBUFFERED=1 \
+    AIRFLOW_HOME=/opt/airflow \
+    PATH="/opt/airflow-venv/bin:$PATH"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential gcc g++ curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/airflow
+
+# ---------- venv 1: the backend's real dependency set (base Python) ----------
+# CPU-only torch first (same reasoning as backend/Dockerfile: plain `pip
+# install torch` pulls the multi-GB CUDA runtime otherwise).
+COPY backend/requirements.txt /tmp/backend-requirements.txt
+RUN pip install --upgrade pip \
+    && pip install "torch>=2.9.0" --index-url https://download.pytorch.org/whl/cpu \
+    && pip install -r /tmp/backend-requirements.txt
+
+# ---------- venv 2: Airflow, fully isolated ----------
+# A separate venv (not --system-site-packages) so Airflow's own constraints
+# file resolves against a clean slate and can never see, let alone downgrade,
+# anything installed above.
+ARG AIRFLOW_VERSION=2.10.5
+ARG PYTHON_VERSION=3.12
+RUN python -m venv /opt/airflow-venv \
+    && /opt/airflow-venv/bin/pip install --upgrade pip \
+    && /opt/airflow-venv/bin/pip install "apache-airflow==${AIRFLOW_VERSION}" \
+        --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+
+EXPOSE 8080
+CMD ["airflow", "standalone"]
