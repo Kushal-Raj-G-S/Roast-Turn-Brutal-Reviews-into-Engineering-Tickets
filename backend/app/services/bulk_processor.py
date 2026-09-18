@@ -3,6 +3,7 @@ Bulk review processor with in-memory clustering.
 Optimized for processing 100k+ reviews in under 2 minutes on CPU.
 """
 
+import gc
 import logging
 import re
 from datetime import datetime
@@ -147,6 +148,15 @@ class BulkProcessor:
             self.session.commit()
             # Extract texts for kept reviews
             kept_texts = kept_df["content"].tolist()
+
+            # The full raw upload (all total_rows) is done with — everything
+            # downstream reads only kept_df / kept_texts, which are independent
+            # copies. Release the raw frame now so peak memory tracks the
+            # CLEANED set + its embeddings, not raw_upload + cleaned + embeddings
+            # all at once. On a 200k upload this is the difference between
+            # holding the full raw text twice over and just the ~50k kept rows.
+            del df
+            gc.collect()
             
             # Step 2: Batch embedding (single-process to avoid crashes — see
             # note below, multiprocessing was tried and made things worse).
@@ -177,6 +187,12 @@ class BulkProcessor:
             )
             embeddings = unique_embeddings[inverse_indices]
             logger.info(f"{log_prefix} Generated embeddings: {embeddings.shape}")
+
+            # Clustering + persist need only `embeddings` and `kept_df`. Drop the
+            # embedding intermediates (raw text lists + the deduped vector table)
+            # so they don't sit alongside the full embeddings array.
+            del unique_embeddings, kept_texts, normalized_texts, unique_texts, inverse_indices
+            gc.collect()
             
             # Step 3: In-memory clustering
             logger.info(f"{log_prefix} Step 3: In-memory clustering")
