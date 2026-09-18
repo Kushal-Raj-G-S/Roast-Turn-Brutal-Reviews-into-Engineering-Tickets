@@ -14,6 +14,8 @@ block or fail the upload pipeline it's reporting on.
 
 import json
 import logging
+import re
+from collections import OrderedDict
 from typing import Optional
 
 import httpx
@@ -206,19 +208,84 @@ async def send_email(to_email: str, subject: str, html: str) -> tuple[bool, Opti
 
 def _email_shell(inner_html: str) -> str:
     """Minimal, dependency-free HTML wrapper -- dark, on-brand, renders
-    fine in every major email client without external CSS/fonts."""
+    fine in every major email client without external CSS/fonts.
+
+    The header uses the real logo rather than an emoji. It's referenced by
+    absolute URL off FRONTEND_URL because email clients can't resolve relative
+    paths, and it sits next to a text wordmark so the brand still reads when a
+    client blocks remote images (most do by default).
+    """
+    logo_url = f"{config.FRONTEND_URL.rstrip('/')}/logo.png"
     return f"""
     <div style="background:#0a0a0a;padding:32px 16px;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
-      <div style="max-width:520px;margin:0 auto;background:#141414;border:1px solid #262626;border-radius:16px;overflow:hidden;">
-        <div style="padding:20px 24px;border-bottom:1px solid #262626;">
-          <span style="font-size:20px;font-weight:800;color:#f97316;">🔥 ROAST</span>
+      <div style="max-width:560px;margin:0 auto;background:#141414;border:1px solid #262626;border-radius:16px;overflow:hidden;">
+        <div style="padding:18px 24px;border-bottom:1px solid #262626;">
+          <img src="{logo_url}" width="28" height="28" alt="Roast" style="vertical-align:middle;border:0;display:inline-block;margin-right:10px;" />
+          <span style="font-size:19px;font-weight:800;color:#f97316;vertical-align:middle;letter-spacing:0.5px;">ROAST</span>
         </div>
         <div style="padding:24px;color:#e5e5e5;font-size:14px;line-height:1.6;">
           {inner_html}
         </div>
+        <div style="padding:14px 24px;border-top:1px solid #262626;color:#6b7280;font-size:11px;">
+          You're getting this because alerts are on for this app.
+        </div>
       </div>
     </div>
     """
+
+
+# Cluster titles arrive with their severity baked into the string, e.g.
+# "[CRITICAL] Issue: app won't open". Rendering that raw is noisy, so we split
+# the severity off and show it as a coloured pill instead.
+_TITLE_RE = re.compile(
+    r"^\s*\[(?P<sev>CRITICAL|HIGH|MEDIUM|LOW)\]\s*(?:Issue\s*:)?\s*(?P<title>.*)$",
+    re.IGNORECASE,
+)
+
+_SEV_STYLE = {
+    "CRITICAL": ("#7f1d1d", "#fecaca"),
+    "HIGH": ("#7c2d12", "#fed7aa"),
+    "MEDIUM": ("#713f12", "#fef08a"),
+    "LOW": ("#1e3a8a", "#bfdbfe"),
+}
+
+
+def _split_severity(title: str) -> tuple[Optional[str], str]:
+    m = _TITLE_RE.match(title or "")
+    if m:
+        return m.group("sev").upper(), (m.group("title") or "").strip(" .")
+    return None, (title or "").strip(" .")
+
+
+def _sev_pill(sev: Optional[str]) -> str:
+    if not sev:
+        return ""
+    bg, fg = _SEV_STYLE.get(sev, ("#374151", "#e5e7eb"))
+    return (
+        f'<span style="display:inline-block;background:{bg};color:{fg};font-size:10px;'
+        f'font-weight:700;letter-spacing:0.6px;padding:2px 7px;border-radius:999px;'
+        f'margin-right:8px;">{sev}</span>'
+    )
+
+
+def _intro_line(app_name: str, review_count: int, n_crit: int, n_reg: int) -> str:
+    """A short human opener so the alert reads like a person flagging something,
+    not a cron job dumping rows."""
+    if n_reg and n_crit:
+        gist = "Some fixes didn't stick, and fresh critical issues showed up."
+    elif n_reg:
+        gist = "Bad news: a few things you'd already fixed are back."
+    elif n_crit:
+        gist = "A few new critical issues just surfaced."
+    else:
+        gist = "Here's what stood out."
+    return (
+        f'<p style="margin:0 0 6px;font-size:16px;color:#fff;font-weight:600;">'
+        f'Fresh roast for {app_name} 🔥</p>'
+        f'<p style="margin:0 0 18px;color:#a3a3a3;">'
+        f'We read through <strong style="color:#e5e5e5;">{review_count:,}</strong> '
+        f'review{"s" if review_count != 1 else ""}. {gist}</p>'
+    )
 
 
 def format_batch_alert_email(
@@ -235,26 +302,64 @@ def format_batch_alert_email(
     subject = f"🔥 {total} issue{'s' if total != 1 else ''} found in \"{app_name}\""
 
     rows = ""
-    if regression_items:
-        rows += '<p style="font-weight:700;color:#c084fc;margin:16px 0 8px;">Fix didn\'t hold</p>'
-        for cluster_title, resolved_title, confidence in regression_items:
-            rows += (
-                f'<p style="margin:4px 0;">• "{resolved_title}" was resolved, but '
-                f'"{cluster_title}" matches it at {confidence:.0%} confidence</p>'
-            )
+
     if critical_items:
-        rows += '<p style="font-weight:700;color:#f87171;margin:16px 0 8px;">New critical clusters</p>'
+        rows += (
+            '<p style="font-weight:700;color:#f87171;margin:22px 0 10px;font-size:13px;'
+            'letter-spacing:0.4px;text-transform:uppercase;">New critical clusters</p>'
+        )
         for cluster_title, item_review_count in critical_items:
+            sev, clean = _split_severity(cluster_title)
             rows += (
-                f'<p style="margin:4px 0;">• "{cluster_title}" '
-                f"({item_review_count} review{'s' if item_review_count != 1 else ''})</p>"
+                '<div style="background:#1c1c1c;border:1px solid #2b2b2b;border-left:3px solid #dc2626;'
+                'border-radius:8px;padding:10px 12px;margin:0 0 8px;">'
+                f'{_sev_pill(sev or "CRITICAL")}'
+                f'<span style="color:#f5f5f5;">{clean}</span>'
+                f'<div style="color:#8b8b8b;font-size:12px;margin-top:4px;">'
+                f'{item_review_count:,} review{"s" if item_review_count != 1 else ""}</div>'
+                "</div>"
             )
+
+    if regression_items:
+        # Group by the issue that regressed. The raw list repeats the same
+        # "X was resolved, but Y matches it" line once per match -- on a real
+        # upload that's the same left-hand side 15 times over, which is what
+        # made this email unreadable. One block per resolved issue, matches
+        # nested under it, strongest match first.
+        grouped: "OrderedDict[str, list[tuple[str, float]]]" = OrderedDict()
+        for cluster_title, resolved_title, confidence in regression_items:
+            grouped.setdefault(resolved_title, []).append((cluster_title, confidence))
+
+        rows += (
+            '<p style="font-weight:700;color:#c084fc;margin:22px 0 10px;font-size:13px;'
+            'letter-spacing:0.4px;text-transform:uppercase;">Fixes that didn\'t hold</p>'
+        )
+        for resolved_title, matches in grouped.items():
+            sev, clean = _split_severity(resolved_title)
+            matches.sort(key=lambda m: m[1], reverse=True)
+            rows += (
+                '<div style="background:#1c1c1c;border:1px solid #2b2b2b;border-left:3px solid #a855f7;'
+                'border-radius:8px;padding:10px 12px;margin:0 0 10px;">'
+                f'{_sev_pill(sev)}'
+                f'<span style="color:#f5f5f5;">{clean}</span>'
+                '<div style="color:#8b8b8b;font-size:12px;margin:6px 0 6px;">'
+                f'marked resolved — but {len(matches)} new cluster'
+                f'{"s" if len(matches) != 1 else ""} look like it again:</div>'
+            )
+            for match_title, confidence in matches:
+                _, match_clean = _split_severity(match_title)
+                rows += (
+                    '<div style="margin:3px 0;color:#c4c4c4;font-size:13px;">'
+                    f'<span style="color:#a855f7;">↩</span> {match_clean} '
+                    f'<span style="color:#7c7c7c;">· {confidence:.0%}</span></div>'
+                )
+            rows += "</div>"
 
     link = upload_link(upload_id)
     inner = f"""
-      <p style="margin:0 0 12px;">{review_count} review{'s' if review_count != 1 else ''} analyzed.</p>
+      {_intro_line(app_name, review_count, len(critical_items), len(regression_items))}
       {rows}
-      <a href="{link}" style="display:inline-block;margin-top:20px;padding:10px 20px;background:linear-gradient(90deg,#f97316,#dc2626);color:#fff;text-decoration:none;border-radius:10px;font-weight:600;">View Upload #{upload_id}</a>
+      <a href="{link}" style="display:inline-block;margin-top:22px;padding:11px 22px;background:linear-gradient(90deg,#f97316,#dc2626);color:#fff;text-decoration:none;border-radius:10px;font-weight:600;">See the full breakdown →</a>
     """
     return subject, _email_shell(inner)
 
