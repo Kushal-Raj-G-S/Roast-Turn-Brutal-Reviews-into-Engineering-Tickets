@@ -45,11 +45,22 @@ ENV PATH="/opt/venv/bin:$PATH"
 # changing) torch layer stays cached across application code changes, and
 # so the requirements install below sees torch already satisfied and does
 # not pull the CUDA variant.
+# LITE=1 builds WITHOUT torch / sentence-transformers / optimum. That drops
+# ~400MB of resident RAM (verified: 487MB -> 219MB app import), which is what
+# lets the whole app run on a 512MB dyno. Embeddings then run via the NVIDIA
+# hosted API (set EMBEDDING_PROVIDER=nvidia) instead of a local model —
+# providers.py's `try: import sentence_transformers` simply falls to None.
+# LITE=0 (default) keeps the local-model stack for a bigger box.
+ARG LITE=0
 COPY requirements.txt .
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir "torch>=2.9.0" \
-        --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir -r requirements.txt
+    && if [ "$LITE" = "1" ]; then \
+        grep -viE '^(torch|sentence-transformers|optimum)([><=~!\[]|$)' requirements.txt > requirements-runtime.txt \
+        && pip install --no-cache-dir -r requirements-runtime.txt ; \
+    else \
+        pip install --no-cache-dir "torch>=2.9.0" --index-url https://download.pytorch.org/whl/cpu \
+        && pip install --no-cache-dir -r requirements.txt ; \
+    fi
 
 # ---------- runtime ----------
 FROM python:3.13-slim AS runtime

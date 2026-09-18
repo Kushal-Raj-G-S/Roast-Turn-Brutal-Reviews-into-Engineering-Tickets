@@ -1,0 +1,59 @@
+# Roast — production-grade local stack.
+#
+#   docker compose up --build
+#
+# Brings up the real product as two containers:
+#   - backend  (FastAPI, port 8000)  — the v2 pipeline: NVIDIA embeddings,
+#                                       FAISS-KMeans clustering, ranking.
+#   - frontend (Next.js, port 3000)  — the UI a user actually clicks.
+#
+# The database and auth stay on Supabase (free tier) via the values in
+# backend/.env and frontend/.env — nothing else to run. The same two images
+# deploy unchanged to any Docker host (a VM, Render, Fly, Cloud Run, ...);
+# only the two .env files change per environment.
+#
+# Networking note: browser code calls the backend at NEXT_PUBLIC_API_URL
+# (http://localhost:8000, the host-published port). Server-side frontend code
+# (proxy route handlers) calls it in-network at BACKEND_URL=http://backend:8000.
+
+services:
+  backend:
+    build:
+      context: ./backend
+      args:
+        # LITE=1: no local torch/sentence-transformers. Embeddings run on the
+        # NVIDIA hosted API (EMBEDDING_PROVIDER=nvidia in backend/.env), with
+        # the pure-sklearn TF-IDF tier as an offline fallback. Much smaller,
+        # faster-to-pull image. Set LITE=0 to bundle the local model stack.
+        LITE: "1"
+    image: roast-backend:prod
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+
+  frontend:
+    build:
+      context: ./frontend
+    image: roast-frontend:prod
+    env_file:
+      - ./frontend/.env
+    environment:
+      NODE_ENV: "production"
+      # Server-side (route handlers) reach the backend over the compose network.
+      BACKEND_URL: "http://backend:8000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
