@@ -1107,22 +1107,30 @@ export default function AnalyticsPage() {
         if (clusters.length === 0 || totalReviews === 0) return null;
 
         const sorted = [...clusters].sort((a, b) => (b.review_count || 0) - (a.review_count || 0));
-        const top = sorted[0];
-        const runners = sorted.slice(1, 5); // exactly 4 runner-ups â†’ clean 4-col row
+
+        // Praise vs complaint. The loudest cluster on real data is often praise
+        // ("love this game"), and labelling that "#1 User Complaint" is just
+        // wrong. Backend severity is rating-driven (praise -> 'low'), so it's
+        // the reliable base signal; unambiguous title language overrides it
+        // either way (a "good but too many ads" title is still a complaint).
+        const positiveWords = /\b(nice|good|great|excellent|love|like|awesome|amazing|perfect|best|fantastic|super|wonderful|fun|enjoy|enjoying|cool|helpful|useful|satisfied|happy|addictive|addicting)\b/i;
+        const negativeWords = /\b(bad|crash|broken|bug|issue|problem|fail|hate|worst|terrible|slow|annoying|error|stuck|lag|freeze|glitch|ads?|money|scam|expensive|cheat|refund)\b/i;
+        const isPositive = (c: typeof sorted[number]) => {
+          const t = cleanTitle(c.title || '');
+          if (negativeWords.test(t)) return false; // clearly a complaint
+          if (positiveWords.test(t)) return true;  // clearly praise
+          return c.severity === 'low';             // else fall back to severity
+        };
+
+        // The card's whole point is the top COMPLAINT. Pick the loudest actual
+        // complaint; only fall back to the loudest positive cluster when there
+        // are no complaints at all, and relabel it as a signal in that case.
+        const complaints = sorted.filter((c) => !isPositive(c));
+        const top = complaints[0] ?? sorted[0];
+        const isTopPositive = isPositive(top);
+        const runners = sorted.filter((c) => c.id !== top.id).slice(0, 4);
         const topMeta = severityMeta[top.severity] ?? severityMeta.low;
         const topPct = Math.round(((top.review_count || 0) / totalReviews) * 100);
-
-        // A LOW-severity "issue" is often just praise the pipeline kept as a
-        // cluster (e.g. "Nice app, excellent...") -- calling that a
-        // "complaint" is actively wrong, not just imprecise. Detect it from
-        // the title's own language instead of assuming severity == complaint.
-        const positiveWords = /\b(nice|good|great|excellent|love|like|awesome|amazing|perfect|best|fantastic|super|wonderful|fun|enjoy|enjoying|cool|helpful|useful|satisfied|happy)\b/i;
-        const negativeWords = /\b(bad|crash|broken|bug|issue|problem|fail|hate|worst|terrible|slow|annoying|error|stuck|lag|freeze|glitch)\b/i;
-        const topTitleClean = cleanTitle(top.title);
-        const isTopPositive =
-          top.severity === 'low' &&
-          positiveWords.test(topTitleClean) &&
-          !negativeWords.test(topTitleClean);
 
         const topHeading = isTopPositive ? '#1 Top Signal' : '#1 User Complaint';
         const topIconBg = isTopPositive
@@ -1145,7 +1153,7 @@ export default function AnalyticsPage() {
                   </div>
                   <div>
                     <h3 className="font-bold text-white">{topHeading}</h3>
-                    <p className="text-xs text-neutral-500">Loudest cluster by review volume - {totalReviews.toLocaleString()} total reviews</p>
+                    <p className="text-xs text-neutral-500">{isTopPositive ? 'Loudest cluster by review volume' : 'Loudest complaint by review volume'} - {totalReviews.toLocaleString()} total reviews</p>
                   </div>
                 </div>
                 <span className={`text-xs font-black px-2.5 py-1 rounded-full border ${topMeta.color} ${topMeta.textBg} ${topMeta.border}`}>
