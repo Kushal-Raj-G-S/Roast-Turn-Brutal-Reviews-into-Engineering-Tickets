@@ -17,6 +17,12 @@ class FAISSClusteringEngine(IClusteringEngine):
     Fast and scalable for CPU.
     """
 
+    # Target ~150 reviews per cluster, capped so K never explodes on huge
+    # uploads. K is derived from n, not from a similarity threshold -- see
+    # the class docstring for why the old threshold approach was replaced.
+    REVIEWS_PER_CLUSTER = 150
+    MAX_CLUSTERS = 400
+
     def __init__(self, metric: str = "cosine"):
         self.metric = metric
 
@@ -27,76 +33,58 @@ class FAISSClusteringEngine(IClusteringEngine):
         min_cluster_size: int = 1
     ) -> List[int]:
         """
-        Cluster embeddings using greedy similarity-based approach.
-        
+        Partition embeddings with FAISS-native KMeans (adaptive K).
+
+        Why not the old greedy-threshold approach: single-linkage chaining on
+        a cosine threshold collapsed catastrophically -- either ~96% of
+        reviews into one mega-cluster (low threshold) or thousands of
+        singletons (high threshold, e.g. this method's old default of
+        similarity >= 0.7). No threshold produced a usable distribution;
+        the defect was the algorithm, not the tuning. KMeans avoids both
+        failure modes by construction: a fixed K partitions every point,
+        with no chaining and no unclustered noise.
+
+        `threshold`/`min_cluster_size` are accepted for interface
+        compatibility but no longer drive the partition -- K is sized from
+        the review count instead.
+
         Args:
-            embeddings: List of embedding vectors
-            threshold: Similarity threshold (0-1)
-            min_cluster_size: Minimum reviews per cluster
-        
+            embeddings: List of embedding vectors (one per review)
+            threshold: Accepted for compatibility; not used to size clusters.
+            min_cluster_size: Accepted for compatibility.
+
         Returns:
-            List of cluster labels (same length as embeddings)
+            List of cluster labels (same length as embeddings), each in
+            [0, k).
         """
         import faiss
 
         if not embeddings:
             return []
 
-        # Convert to numpy
         vectors = np.array(embeddings, dtype=np.float32)
-        n_vectors = len(vectors)
+        n_vectors, dimension = vectors.shape
 
-        # Create FAISS index
-        dimension = vectors.shape[1]
-        if self.metric == "cosine":
-            index = faiss.IndexFlatIP(dimension)
-            # Normalize for cosine similarity
-            faiss.normalize_L2(vectors)
-        else:
-            index = faiss.IndexFlatL2(dimension)
+        if n_vectors <= 2:
+            # Too few to partition meaningfully; each is its own cluster.
+            return list(range(n_vectors))
 
-        index.add(vectors)
+        # Cosine == L2 on L2-normalized vectors, so normalize once and let
+        # KMeans (which minimizes L2) operate in cosine space.
+        faiss.normalize_L2(vectors)
 
-        # Greedy clustering
-        labels = [-1] * n_vectors  # -1 = unclustered
-        current_cluster_id = 0
-        processed = set()
+        k = max(1, min(self.MAX_CLUSTERS, n_vectors // self.REVIEWS_PER_CLUSTER))
+        if k <= 1:
+            return [0] * n_vectors
 
-        for i in range(n_vectors):
-            if i in processed:
-                continue
-
-            # Find neighbors within threshold
-            distances, indices = index.search(vectors[i:i+1], n_vectors)
-            
-            # Filter by threshold
-            if self.metric == "cosine":
-                # For inner product (cosine), higher is more similar
-                similar_mask = distances[0] >= (1 - threshold)
-            else:
-                # For L2, lower is more similar
-                similar_mask = distances[0] <= threshold
-
-            similar_indices = indices[0][similar_mask].tolist()
-
-            # Filter out already processed
-            similar_indices = [idx for idx in similar_indices if idx not in processed]
-
-            if len(similar_indices) >= min_cluster_size:
-                # Assign cluster
-                for idx in similar_indices:
-                    labels[idx] = current_cluster_id
-                    processed.add(idx)
-                current_cluster_id += 1
-            else:
-                # Single review cluster (or noise)
-                labels[i] = current_cluster_id
-                processed.add(i)
-                current_cluster_id += 1
+        km = faiss.Kmeans(dimension, k, niter=25, seed=42, verbose=False)
+        km.train(vectors)
+        _, assignments = km.index.search(vectors, 1)
+        labels = [int(row[0]) for row in assignments]
 
         logger.info(
-            f"Clustered {n_vectors} vectors into {current_cluster_id} clusters "
-            f"(threshold={threshold})"
+            f"Clustered {n_vectors} vectors into {k} clusters "
+            f"(FAISS KMeans, ~{self.REVIEWS_PER_CLUSTER}/cluster)"
         )
 
         return labels

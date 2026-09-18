@@ -70,6 +70,16 @@ class IClusterRepository(ABC):
         pass
 
     @abstractmethod
+    async def delete_by_upload(self, upload_id: UploadId) -> int:
+        """Delete all clusters for an upload; returns the number removed.
+
+        Makes the persist stage idempotent: re-running clustering for an
+        upload (an Airflow retry, or a manual re-trigger) replaces the prior
+        result instead of appending a second full set of clusters.
+        """
+        pass
+
+    @abstractmethod
     async def update(self, cluster: Cluster) -> Cluster:
         """Update an existing cluster."""
         pass

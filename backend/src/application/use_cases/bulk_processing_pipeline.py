@@ -411,18 +411,24 @@ class BulkProcessingPipeline:
         versions = list(set(r.metadata.version for r in reviews if r.metadata.version))
         devices = list(set(r.metadata.device for r in reviews if r.metadata.device))
 
-        # Generate title (simple version - can be improved)
-        first_review = reviews[0].text
-        title = first_review[:100] + "..." if len(first_review) > 100 else first_review
+        # Title: the medoid review (the one most central to the cluster), not
+        # an arbitrary reviews[0]. A first-review title regularly misrepresents
+        # the cluster -- e.g. a lone praise review heading a cluster whose body
+        # is complaints. The medoid is the review closest to the cluster
+        # centroid in embedding space, i.e. the most representative one.
+        rep_review = self._medoid_review(reviews)
+        rep_text = rep_review.text
+        title = rep_text[:100] + "..." if len(rep_text) > 100 else rep_text
 
-        # Create sample reviews
+        # Sample reviews: lead with the representative one, then fill.
+        ordered = [rep_review] + [r for r in reviews if r is not rep_review]
         sample_reviews = [
             {
                 "text": r.text,
                 "rating": r.metadata.rating,
                 "version": r.metadata.version
             }
-            for r in reviews[:5]  # Top 5 samples
+            for r in ordered[:5]  # Top 5 samples, representative first
         ]
 
         # Create metrics
@@ -433,7 +439,7 @@ class BulkProcessingPipeline:
             affected_versions=versions,
             affected_devices=devices,
             time_range=(datetime.utcnow(), datetime.utcnow()),
-            keywords=[]
+            keywords=self._extract_keywords(reviews)
         )
 
         return Cluster(
@@ -445,6 +451,66 @@ class BulkProcessingPipeline:
             metrics=metrics,
             sample_reviews=sample_reviews
         )
+
+    @staticmethod
+    def _medoid_review(reviews: List[Review]) -> Review:
+        """Return the review closest to the cluster centroid in embedding space.
+
+        Falls back to the first review if embeddings are missing or malformed,
+        so title generation can never fail the persist stage.
+        """
+        if len(reviews) <= 1:
+            return reviews[0]
+        try:
+            vecs = np.asarray(
+                [r.embedding.to_array() for r in reviews], dtype=np.float32
+            )
+            # Cosine similarity to the centroid == dot product once both are
+            # L2-normalized. The most similar review is the medoid.
+            norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            unit = vecs / norms
+            centroid = unit.mean(axis=0)
+            cnorm = np.linalg.norm(centroid) or 1.0
+            centroid = centroid / cnorm
+            sims = unit @ centroid
+            return reviews[int(np.argmax(sims))]
+        except Exception:
+            return reviews[0]
+
+    # Words that carry no product signal -- dropped from keyword extraction.
+    _KEYWORD_STOPWORDS = frozenset({
+        "the", "a", "an", "and", "or", "but", "is", "are", "was", "were", "be",
+        "been", "being", "to", "of", "in", "on", "at", "for", "with", "as",
+        "it", "its", "this", "that", "these", "those", "i", "you", "he", "she",
+        "we", "they", "me", "my", "your", "his", "her", "our", "their", "so",
+        "if", "then", "than", "too", "very", "can", "will", "just", "not", "no",
+        "do", "does", "did", "have", "has", "had", "get", "got", "would",
+        "could", "should", "app", "spotify", "music", "im", "dont", "cant",
+        "really", "much", "even", "also", "like", "all", "when", "what", "why",
+        "how", "there", "here", "out", "up", "about", "from", "one", "more",
+    })
+
+    @classmethod
+    def _extract_keywords(cls, reviews: List[Review], top_k: int = 8) -> List[str]:
+        """Top recurring content words across a cluster's reviews.
+
+        Cheap frequency count with a stopword filter -- enough to label a
+        cluster ("ads", "premium", "offline", "crash") without pulling in a
+        heavyweight keyword model. Never raises: returns [] on any failure.
+        """
+        try:
+            import re
+            from collections import Counter
+
+            counts: Counter = Counter()
+            for r in reviews:
+                for tok in re.findall(r"[a-zA-Z]{3,}", (r.text or "").lower()):
+                    if tok not in cls._KEYWORD_STOPWORDS:
+                        counts[tok] += 1
+            return [word for word, _ in counts.most_common(top_k)]
+        except Exception:
+            return []
 
     async def _rank_clusters(
         self,
@@ -486,6 +552,11 @@ class BulkProcessingPipeline:
         """Stage 7: Persist clusters to database."""
         stage_start = time.time()
         logger.info(f"Stage 7: Persisting {len(clusters)} clusters")
+
+        # Idempotency: clear any clusters from a prior run of this upload
+        # before inserting, so an Airflow retry / re-trigger replaces the
+        # result instead of appending a duplicate full set.
+        await self.cluster_repo.delete_by_upload(upload.id)
 
         # Batch create
         saved_clusters = await self.cluster_repo.create_batch(clusters)

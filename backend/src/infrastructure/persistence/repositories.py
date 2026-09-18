@@ -308,6 +308,21 @@ class PostgresClusterRepository(IClusterRepository):
         
         return self._to_domain(cluster_model)
 
+    async def delete_by_upload(self, upload_id: UploadId) -> int:
+        """Delete all clusters for an upload; returns the number removed."""
+        from app.models.bulk_models import Cluster as ClusterModel
+        from sqlalchemy import delete as sa_delete
+
+        stmt = sa_delete(ClusterModel).where(
+            ClusterModel.upload_id == upload_id.value
+        )
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        removed = result.rowcount or 0
+        if removed:
+            logger.info(f"Deleted {removed} existing clusters for upload {upload_id.value}")
+        return removed
+
     async def list_by_upload(
         self,
         upload_id: UploadId,
