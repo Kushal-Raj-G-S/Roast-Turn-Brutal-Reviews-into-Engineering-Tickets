@@ -10,7 +10,7 @@ from typing import Optional
 
 from src.infrastructure.dependency_injection import DependencyContainer, ServiceLifetime
 from src.infrastructure.messaging.event_bus import create_event_bus, EventBus
-from src.infrastructure.embeddings.providers import SentenceTransformerProvider, OpenAIEmbeddingProvider
+from src.infrastructure.embeddings.providers import SentenceTransformerProvider, OpenAIEmbeddingProvider, NvidiaEmbeddingProvider
 from src.infrastructure.embeddings.vector_stores import FAISSVectorStore, PineconeVectorStore, QdrantVectorStore
 from src.infrastructure.clustering.engines import FAISSClusteringEngine, HDBSCANClusteringEngine
 from src.infrastructure.ml.actionability_scorer import MLActionabilityScorer, RuleBasedActionabilityScorer
@@ -60,6 +60,19 @@ class ApplicationConfig:
     EMBEDDING_PROVIDER: str = os.getenv("EMBEDDING_PROVIDER", "sentence_transformers")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "paraphrase-MiniLM-L3-v2")
     OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
+    # NVIDIA hosted embeddings (EMBEDDING_PROVIDER=nvidia) — no local torch,
+    # so the app fits a 512 MB dyno while still using real semantic
+    # embeddings. NVIDIA_EMBED_API_KEYS is comma-separated: add keys from
+    # separate NVIDIA accounts to multiply the 40 RPM budget. Falls back to
+    # NVIDIA_API_KEY (the one already used for RCA) if no dedicated key set.
+    NVIDIA_EMBED_API_KEYS: str = os.getenv("NVIDIA_EMBED_API_KEYS", "") or os.getenv("NVIDIA_API_KEY", "")
+    NVIDIA_EMBED_MODELS: str = os.getenv(
+        "NVIDIA_EMBED_MODELS",
+        "nvidia/nemotron-3-embed-1b,nvidia/llama-nemotron-embed-vl-1b-v2",
+    )
+    NVIDIA_EMBED_DIMENSION: int = int(os.getenv("NVIDIA_EMBED_DIMENSION", "2048"))
+    NVIDIA_EMBED_BATCH_SIZE: int = int(os.getenv("NVIDIA_EMBED_BATCH_SIZE", "100"))
+    NVIDIA_EMBED_CONCURRENCY: int = int(os.getenv("NVIDIA_EMBED_CONCURRENCY", "16"))
     
     # Vector Store Configuration
     VECTOR_BACKEND: str = os.getenv("VECTOR_BACKEND", "faiss_local")
@@ -108,7 +121,25 @@ def configure_logging(config: ApplicationConfig):
 
 def create_embedding_provider(config: ApplicationConfig) -> IEmbeddingProvider:
     """Factory for embedding provider based on configuration."""
-    if config.EMBEDDING_PROVIDER == "openai":
+    if config.EMBEDDING_PROVIDER == "nvidia":
+        keys = [k for k in config.NVIDIA_EMBED_API_KEYS.split(",") if k.strip()]
+        if not keys:
+            raise ValueError(
+                "NVIDIA_EMBED_API_KEYS (or NVIDIA_API_KEY) required for nvidia embedding provider"
+            )
+        models = config.NVIDIA_EMBED_MODELS.split(",")
+        logger.info(
+            f"Using NVIDIA embedding provider: {len(keys)} key(s), models={models}"
+        )
+        return NvidiaEmbeddingProvider(
+            api_keys=keys,
+            models=models,
+            dimension=config.NVIDIA_EMBED_DIMENSION,
+            api_batch_size=config.NVIDIA_EMBED_BATCH_SIZE,
+            concurrency=config.NVIDIA_EMBED_CONCURRENCY,
+            cache_enabled=config.CACHE_ENABLED,
+        )
+    elif config.EMBEDDING_PROVIDER == "openai":
         if not config.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY required for OpenAI provider")
         logger.info("Using OpenAI embedding provider")

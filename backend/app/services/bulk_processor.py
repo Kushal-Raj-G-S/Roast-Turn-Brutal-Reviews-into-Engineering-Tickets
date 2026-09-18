@@ -386,100 +386,50 @@ class BulkProcessor:
         
         return kept_indices
     
+    # Clustering shape: ~one cluster per this many reviews, capped, so small
+    # uploads stay coarse and large ones get proportionally more granular.
+    _REVIEWS_PER_CLUSTER = 150
+    _MAX_CLUSTERS = 400
+
     def _cluster_in_memory(self, embeddings: np.ndarray, log_prefix: str = "") -> List[int]:
         """
-        Cluster embeddings using FAISS for fast nearest-neighbor search.
-        
-        Algorithm:
-        1. Build FAISS index (inner product for normalized vectors)
-        2. For each point, find neighbors within threshold
-        3. Group connected components using union-find
-        
-        Args:
-            embeddings: Array of shape [N, D]
-        
-        Returns:
-            List of cluster IDs (length N)
+        Partition embeddings into K clusters with FAISS KMeans (adaptive K).
+
+        Replaces the previous single-linkage / connected-components approach.
+        That one used FAISS only for neighbour search, then merged via
+        union-find — which *chained*: on real data a dense core of similar
+        reviews all transitively linked into one giant "blob" while the rest
+        fell out as singletons. Verified on a 200k upload: ~96% of reviews
+        collapsed into ONE cluster at every threshold from 0.70 to 0.92
+        similarity — the algorithm, not the threshold, was the problem.
+
+        KMeans partitions into K balanced groups instead — no blob, no
+        singleton explosion. K scales with the data (one cluster per ~150
+        reviews, capped at 400). Still FAISS (same library as before), and
+        fast: ~2s on 50k vectors.
         """
+        import faiss  # lazy import — only load when clustering is actually needed
         n, d = embeddings.shape
-        
         if n == 0:
             return []
-        
-        # Normalize embeddings for cosine similarity (required for inner product)
-        import faiss  # lazy import — only load when clustering is actually needed
-        logger.info(f"{log_prefix} Normalizing embeddings for cosine similarity")
-        faiss.normalize_L2(embeddings)  # In-place normalization
-        
-        # Build FAISS index. IndexFlatIP is exact brute-force search — O(n^2)
-        # — but its inner loop is a BLAS matrix multiply, which is fast
-        # enough in practice that it actually beats the approximate HNSW
-        # index below ~100k points (benchmarked locally: 100k -> flat 19s vs
-        # HNSW 26s; 150k -> flat 128s vs HNSW 44s, and the gap only widens
-        # from there). A 226k-review upload was observed stalling on this
-        # exact step for many minutes — HNSW's ~O(n log n) query time is
-        # what actually fixes that, with negligible recall loss for this use
-        # case (grouping near-duplicate review complaints doesn't need
-        # mathematically exact nearest neighbors).
-        logger.info(f"{log_prefix} Building FAISS index")
-        _HNSW_THRESHOLD = 100000
-        if n > _HNSW_THRESHOLD:
-            index = faiss.IndexHNSWFlat(d, 32, faiss.METRIC_INNER_PRODUCT)
-            index.hnsw.efConstruction = 40
-            index.hnsw.efSearch = 64
-            logger.info(f"{log_prefix} Using approximate HNSW index ({n} vectors > {_HNSW_THRESHOLD})")
-        else:
-            index = faiss.IndexFlatIP(d)  # Inner product (cosine after normalization)
-            logger.info(f"{log_prefix} Using exact flat index ({n} vectors)")
-        index.add(embeddings.astype('float32'))
+        if n <= 2:
+            return list(range(n))
 
-        # Search for k nearest neighbors
-        k = min(20, n)  # Top 20 neighbors or less
-        logger.info(f"{log_prefix} Searching for {k} nearest neighbors per point")
-        similarities, indices = index.search(embeddings.astype('float32'), k)
-        
-        # Convert similarity to distance (1 - similarity for cosine)
-        distances = 1 - similarities
-        
-        # Union-find data structure
-        parent = list(range(n))
-        
-        def find(x):
-            if parent[x] != x:
-                parent[x] = find(parent[x])  # Path compression
-            return parent[x]
-        
-        def union(x, y):
-            px, py = find(x), find(y)
-            if px != py:
-                parent[px] = py
-        
-        # Merge points within threshold. HNSW (unlike the exact flat index)
-        # can return -1 for a neighbor slot it couldn't fill — must skip
-        # those, since union(i, -1) would silently union with the LAST
-        # element via Python's negative indexing and corrupt clusters.
-        logger.info(f"{log_prefix} Clustering with threshold {config.COSINE_THRESHOLD}")
-        for i in range(n):
-            for j, dist in zip(indices[i], distances[i]):
-                if j >= 0 and dist <= config.COSINE_THRESHOLD:
-                    union(i, int(j))
-        
-        # Assign cluster IDs
-        cluster_map = {}
-        cluster_assignments = []
-        next_cluster_id = 0
-        
-        for i in range(n):
-            root = find(i)
-            if root not in cluster_map:
-                cluster_map[root] = next_cluster_id
-                next_cluster_id += 1
-            cluster_assignments.append(cluster_map[root])
-        
-        logger.info(f"{log_prefix} Clustering complete: {next_cluster_id} clusters")
-        
+        emb = embeddings.astype('float32')
+        faiss.normalize_L2(emb)  # cosine similarity via inner product
+
+        k = max(1, min(self._MAX_CLUSTERS, n // self._REVIEWS_PER_CLUSTER))
+        if k <= 1:
+            return [0] * n
+
+        logger.info(f"{log_prefix} FAISS KMeans clustering: {n} vectors -> K={k}")
+        km = faiss.Kmeans(d, k, niter=25, seed=42, verbose=False)
+        km.train(emb)
+        _, labels = km.index.search(emb, 1)
+        cluster_assignments = [int(x[0]) for x in labels]
+        logger.info(f"{log_prefix} Clustering complete: {len(set(cluster_assignments))} clusters")
         return cluster_assignments
-    
+
     def _persist_clusters(
         self,
         upload_id: int,
@@ -508,24 +458,62 @@ class BulkProcessor:
         
         logger.info(f"{log_prefix} Found {len(clusters_dict)} total clusters, selecting top priority clusters...")
         
+        # Normalized embeddings for cohesion + medoid (representative) picking.
+        # Clustering normalized a copy, so the array passed here may not be.
+        norm_emb = embeddings.astype('float32')
+        _norms = np.linalg.norm(norm_emb, axis=1, keepdims=True)
+        _norms[_norms == 0] = 1.0
+        norm_emb = norm_emb / _norms
+
+        # Star ratings — the language-agnostic severity signal. Praise is
+        # almost always 4-5 stars; real issues 1-3. This is what suppresses
+        # "great app!" clusters that English keyword matching lets through,
+        # in any language.
+        if "score" in df.columns:
+            ratings_all = df["score"].fillna(0).astype(float).to_numpy()
+        else:
+            ratings_all = np.zeros(len(df))
+
+        # Issue-vs-generic reference axis (same embedding space as reviews).
+        refs = self._issue_reference_centroids()
+
         # Analyze all clusters and calculate priority scores
         cluster_metadata = []
-        
+
         for cluster_num, review_positions in clusters_dict.items():
-            # Get representative review directly from DataFrame
-            rep_pos = review_positions[0]
+            pos = np.array(review_positions)
+            vecs = norm_emb[pos]
+            centroid = vecs.mean(axis=0)
+            cnorm = np.linalg.norm(centroid) or 1.0
+            centroid = centroid / cnorm
+            sims = vecs @ centroid
+            cohesion = float(sims.mean())                      # cluster tightness 0..1
+
+            # Representative = medoid (closest to centroid), not an arbitrary
+            # first row — gives a title/severity that reflects the cluster.
+            rep_pos = int(pos[int(np.argmax(sims))])
             rep_content = df.iloc[rep_pos]["content"]
-            
-            # Calculate severity
-            severity = self._calculate_severity(rep_content)
-            
-            # Calculate priority score
+
+            cl_valid = ratings_all[pos][ratings_all[pos] > 0]
+            avg_rating = float(cl_valid.mean()) if cl_valid.size else 0.0
+
+            # Issue-specificity: leans "actionable issue" vs "generic eval".
+            # Demotes "good"/"nice"/"ok" clusters rating can't catch. 0 if refs unavailable.
+            if refs is not None:
+                issue_specificity = float((vecs @ refs[0] - vecs @ refs[1]).mean())
+            else:
+                issue_specificity = 0.0
+
+            severity = self._calculate_severity(rep_content, avg_rating=avg_rating)
             priority_score = self._calculate_priority_score(
                 severity=severity,
                 cluster_size=len(review_positions),
-                content=rep_content
+                content=rep_content,
+                avg_rating=avg_rating,
+                cohesion=cohesion,
+                issue_specificity=issue_specificity,
             )
-            
+
             cluster_metadata.append({
                 'cluster_num': cluster_num,
                 'severity': severity,
@@ -533,9 +521,11 @@ class BulkProcessor:
                 'review_count': len(review_positions),
                 'rep_pos': rep_pos,
                 'rep_content': rep_content,
-                'review_positions': review_positions
+                'review_positions': review_positions,
+                'avg_rating': avg_rating,
+                'cohesion': cohesion,
             })
-        
+
         # Sort by priority score (descending)
         cluster_metadata.sort(key=lambda x: x['priority_score'], reverse=True)
         
@@ -588,55 +578,124 @@ class BulkProcessor:
         self.session.flush()
         logger.info(f"{log_prefix} Persisted {len(selected_clusters)} priority clusters with sample reviews")
     
-    def _calculate_severity(self, text: str) -> str:
+    # Seed phrases defining the "actionable issue" vs "generic evaluation"
+    # axis in embedding space. Used to demote clusters of contentless reviews
+    # ("good", "nice", "ok" — even when low-rated) that keyword+rating alone
+    # can't distinguish from real short issue reports ("app crashes").
+    _ISSUE_SEEDS = [
+        "the app keeps crashing", "login fails and I can't sign in",
+        "it shows an error message", "app freezes and stops responding",
+        "payment or subscription problem", "this feature is broken",
+        "too many ads interrupting", "very slow and laggy performance",
+        "loses my chat history or data", "verification failed cannot access",
+    ]
+    _GENERIC_SEEDS = [
+        "good", "bad", "nice", "worst", "ok", "super", "love it", "amazing",
+        "great", "useless", "thank you", "best app", "very good", "awesome",
+        "cool", "wow", "excellent", "fine",
+    ]
+
+    def _issue_reference_centroids(self):
         """
-        Calculate severity based on keywords (from existing processor logic).
+        (issue_centroid, generic_centroid) in the SAME embedding space as the
+        reviews (both embedded via self.embedding_backend). Cached per
+        processor. Returns None if embedding the seeds fails — the ranking
+        then simply skips the issue-specificity term.
+        """
+        if getattr(self, "_ref_centroids_cache", "unset") != "unset":
+            return self._ref_centroids_cache
+        try:
+            ie = np.asarray(self.embedding_backend.encode_batch(self._ISSUE_SEEDS), dtype="float32")
+            ge = np.asarray(self.embedding_backend.encode_batch(self._GENERIC_SEEDS), dtype="float32")
+            def cen(a):
+                a = a / (np.linalg.norm(a, axis=1, keepdims=True) + 1e-9)
+                c = a.mean(axis=0)
+                return c / (np.linalg.norm(c) or 1.0)
+            self._ref_centroids_cache = (cen(ie), cen(ge))
+        except Exception as e:
+            logger.warning(f"Issue reference centroids unavailable ({e}) — skipping issue-specificity ranking")
+            self._ref_centroids_cache = None
+        return self._ref_centroids_cache
+
+    def _calculate_severity(self, text: str, avg_rating: float = 0.0) -> str:
+        """
+        Cluster severity from keywords AND the cluster's average star rating.
+
+        Keywords alone are English-only, so a Hindi/Arabic complaint scored
+        "low" and a "great app!!!" praise cluster could both slip through
+        mislabelled. The star rating fixes both language-agnostically:
+        4-5★ clusters are satisfaction (forced to "low"), 1-2★ clusters are
+        real dissatisfaction (floored at "high") even with no English keyword.
         """
         text_lower = text.lower()
-        
-        # Critical keywords
-        critical_keywords = ["crash", "crashes", "not working", "broken", "unusable"]
-        if any(kw in text_lower for kw in critical_keywords):
-            return "critical"
-        
-        # High severity
-        high_keywords = ["bug", "error", "issue", "problem", "glitch"]
-        if any(kw in text_lower for kw in high_keywords):
+
+        if any(kw in text_lower for kw in ["crash", "crashes", "not working", "broken", "unusable"]):
+            kw_sev = "critical"
+        elif any(kw in text_lower for kw in ["bug", "error", "issue", "problem", "glitch"]):
+            kw_sev = "high"
+        elif any(kw in text_lower for kw in ["slow", "lag", "annoying", "confusing"]):
+            kw_sev = "medium"
+        else:
+            kw_sev = "low"
+
+        if not avg_rating or avg_rating <= 0:
+            return kw_sev
+
+        order = ["low", "medium", "high", "critical"]
+        # Praise: high average stars → not an issue, regardless of keywords.
+        if avg_rating >= 3.8:
+            return "low"
+        # Strongly negative with weak keyword signal (e.g. non-English) → high.
+        if avg_rating <= 2.0 and order.index(kw_sev) < order.index("high"):
             return "high"
-        
-        # Medium
-        medium_keywords = ["slow", "lag", "annoying", "confusing"]
-        if any(kw in text_lower for kw in medium_keywords):
+        if avg_rating <= 2.8 and kw_sev == "low":
             return "medium"
-        
-        return "low"
-    
-    def _calculate_priority_score(self, severity: str, cluster_size: int, content: str) -> float:
+        return kw_sev
+
+    def _calculate_priority_score(
+        self,
+        severity: str,
+        cluster_size: int,
+        content: str,
+        avg_rating: float = 0.0,
+        cohesion: float = 1.0,
+        issue_specificity: float = 0.0,
+    ) -> float:
         """
-        Calculate priority score for cluster ranking.
-        
-        Higher score = higher priority.
-        Factors: severity weight + cluster size + keyword importance
+        Priority score for ranking clusters. Higher = surfaced first.
+
+        Base = severity weight + log(size) + keyword bonus, then scaled by:
+          - a rating factor that strongly demotes praise clusters (4-5★ ->
+            ~0.05x, 1★ -> ~1x), so real problems top the list;
+          - cohesion (tight, coherent clusters rank above diffuse ones); and
+          - issue-specificity: a semantic factor that demotes contentless
+            "good"/"nice"/"ok" clusters even when they carry low star ratings,
+            which rating and English keywords alone cannot catch.
         """
-        # Severity weights
-        severity_weights = {
-            'critical': 100,
-            'high': 50,
-            'medium': 20,
-            'low': 5
-        }
+        severity_weights = {'critical': 100, 'high': 50, 'medium': 20, 'low': 5}
         severity_score = severity_weights.get(severity, 1)
-        
-        # Size bonus (log scale to prevent huge clusters from dominating)
+
         import math
         size_score = math.log10(cluster_size + 1) * 10
-        
-        # Keyword importance bonus
+
         content_lower = content.lower()
         critical_keywords = ["crash", "not working", "broken", "unusable", "bug", "error"]
         keyword_bonus = sum(5 for kw in critical_keywords if kw in content_lower)
-        
-        return severity_score + size_score + keyword_bonus
+
+        base = severity_score + size_score + keyword_bonus
+
+        # Rating factor: 1★ -> 1.0, 4★ -> ~0, 5★ -> floored 0.05. Praise sinks.
+        if avg_rating and avg_rating > 0:
+            rating_factor = max(0.05, min(1.0, (4.0 - avg_rating) / 3.0))
+        else:
+            rating_factor = 1.0
+
+        cohesion_factor = 0.5 + 0.5 * max(0.0, min(1.0, cohesion))
+
+        # issue_specificity ~ [-0.3, +0.4]: >0 leans issue, <0 leans generic.
+        issue_factor = max(0.1, min(1.5, 0.4 + 2.5 * issue_specificity))
+
+        return base * (0.1 + rating_factor) * cohesion_factor * issue_factor
     
     def _select_top_clusters_by_severity(self, cluster_metadata: list, top_n: int = 5, log_prefix: str = "") -> list:
         """

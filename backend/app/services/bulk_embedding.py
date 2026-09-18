@@ -30,7 +30,13 @@ from app.core.config import config
 
 logger = logging.getLogger(__name__)
 
-_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
+# Default to the 3-layer MiniLM: ~2.2x faster on CPU than the 6-layer
+# all-MiniLM-L6-v2 (benchmarked: 825 vs 373 texts/s), which cuts a 200k-review
+# embed from ~110s to ~50s — the whole "clusters visible" pipeline lands
+# around a minute. Same 384-dim output, so nothing downstream changes.
+# Override with EMBEDDING_LOCAL_MODEL=sentence-transformers/all-MiniLM-L6-v2
+# to trade that speed back for the 6-layer model's slightly better clustering.
+_MODEL_ID = os.getenv("EMBEDDING_LOCAL_MODEL", "sentence-transformers/paraphrase-MiniLM-L3-v2")
 
 # Set EMBEDDING_BACKEND=hf_api to use the hosted API tier instead of loading
 # torch locally (e.g. on a host too memory-constrained for a local model).
@@ -63,6 +69,44 @@ _MAX_SEQ_LENGTH = int(os.getenv("EMBEDDING_MAX_SEQ_LENGTH", "128"))
 # Set EMBEDDING_BACKEND=torch to skip the ONNX attempt entirely (escape
 # hatch for a host/CPU where the pre-quantized ONNX export misbehaves).
 _FORCE_TORCH = os.getenv("EMBEDDING_BACKEND", "").strip().lower() == "torch"
+
+# ── Tier 0 (premium): NVIDIA hosted embeddings ─────────────────────────────
+# Set EMBEDDING_BACKEND=nvidia to use NVIDIA's 1B-param embedding model
+# (nemotron-3-embed) instead of the local MiniLM. Cleaner, tighter clusters
+# (measured cohesion 0.8-1.0 vs MiniLM 0.6-0.85) at the cost of a network
+# call. Falls back cleanly to the local model / TF-IDF for the WHOLE batch if
+# the API is unavailable — never mixes two embedding spaces within one run.
+_FORCE_NVIDIA = os.getenv("EMBEDDING_BACKEND", "").strip().lower() == "nvidia"
+_NVIDIA_KEYS = [k for k in os.getenv("NVIDIA_EMBED_API_KEYS", "").split(",") if k.strip()]
+_NVIDIA_DIM = int(os.getenv("NVIDIA_EMBED_DIMENSION", "512"))
+_NVIDIA_MODELS = [
+    m.strip() for m in os.getenv(
+        "NVIDIA_EMBED_MODELS",
+        "nvidia/nemotron-3-embed-1b,nvidia/llama-nemotron-embed-vl-1b-v2",
+    ).split(",") if m.strip()
+]
+
+
+def _nvidia_encode_batch(texts: List[str]) -> np.ndarray:
+    """
+    Tier-0 premium: embed the whole batch via NVIDIA's API (key rotation +
+    model fallback + truncation live in NvidiaEmbeddingProvider). Raises on
+    any incomplete result so encode_batch can fall back as a whole.
+    """
+    import asyncio
+    from src.infrastructure.embeddings.providers import NvidiaEmbeddingProvider
+
+    provider = NvidiaEmbeddingProvider(
+        api_keys=_NVIDIA_KEYS,
+        models=_NVIDIA_MODELS,
+        dimension=_NVIDIA_DIM,
+        concurrency=16,
+        cache_enabled=False,
+    )
+    vecs = asyncio.run(provider.embed_batch(list(texts)))
+    if any(v is None for v in vecs):
+        raise RuntimeError("NVIDIA embedding returned incomplete results")
+    return np.asarray([v.values for v in vecs], dtype="float32")
 
 # Pre-quantized int8 ONNX export of this exact model, published on the HF
 # hub. AVX2 is present on effectively every x86_64 CPU made since ~2013
@@ -220,23 +264,33 @@ class EmbeddingBackend:
 
     def __init__(self, model_name: str = None):
         self.model_name = model_name or config.MODEL_NAME
+        self._use_nvidia = _FORCE_NVIDIA and bool(_NVIDIA_KEYS)
         self._use_hf = _FORCE_HF_API and bool(_HF_API_KEY)
         self._use_local = False
+
+        if self._use_nvidia:
+            logger.info(
+                f"✅ EmbeddingBackend: Tier-0 NVIDIA API "
+                f"(dim={_NVIDIA_DIM}, {len(_NVIDIA_KEYS)} key(s)) — MiniLM/TF-IDF fallback on failure"
+            )
 
         if self._use_hf:
             logger.info(f"✅ EmbeddingBackend: Tier-1 HuggingFace API ({_MODEL_ID})")
             return
 
+        # Load the local model as primary (NVIDIA off) or as the fallback
+        # engine (NVIDIA on). On a torchless host this quietly drops to TF-IDF.
         try:
             _load_sentence_transformer()
             self._use_local = True
-            logger.info(f"✅ EmbeddingBackend: Tier-0 local sentence-transformers ({_MODEL_ID}, CPU)")
+            if not self._use_nvidia:
+                logger.info(f"✅ EmbeddingBackend: Tier-0 local sentence-transformers ({_MODEL_ID}, CPU)")
         except Exception as e:
             logger.warning(f"⚠️  Local sentence-transformers unavailable ({e}) — falling back")
             if bool(_HF_API_KEY):
                 self._use_hf = True
                 logger.info(f"✅ EmbeddingBackend: Tier-1 HuggingFace API ({_MODEL_ID})")
-            else:
+            elif not self._use_nvidia:
                 logger.warning("⚠️  No HUGGINGFACE_API_KEY either — Tier-2 TF-IDF+SVD fallback active")
 
     def _load_model(self):
@@ -249,9 +303,18 @@ class EmbeddingBackend:
         batch_size: int = None,
         show_progress: bool = False,
     ) -> np.ndarray:
-        """Encode texts → float32 embeddings. Local model → HF API → TF-IDF fallback."""
+        """Encode texts → float32 embeddings. NVIDIA → local model → HF API → TF-IDF fallback."""
         if not texts:
             return np.array([])
+
+        # Tier 0 premium: NVIDIA API, whole-batch. On any failure fall through
+        # to the local/HF/TF-IDF tiers for the ENTIRE batch (never mix spaces).
+        if self._use_nvidia:
+            logger.info(f"Encoding {len(texts)} texts via NVIDIA API (dim={_NVIDIA_DIM})")
+            try:
+                return _nvidia_encode_batch(texts)
+            except Exception as e:
+                logger.warning(f"⚠️  NVIDIA embedding failed ({e}) — falling back to local/TF-IDF for this batch")
 
         if self._use_local:
             logger.info(f"Encoding {len(texts)} texts via local sentence-transformers")

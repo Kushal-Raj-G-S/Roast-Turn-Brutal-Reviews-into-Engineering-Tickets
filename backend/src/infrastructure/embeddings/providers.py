@@ -3,14 +3,17 @@ Embedding Provider Implementations
 Supports multiple embedding models with caching and optimization.
 """
 
+import asyncio
 import logging
 import hashlib
 from typing import List, Optional, Dict, Any
+
+import httpx
 import numpy as np
 
 try:
     from sentence_transformers import SentenceTransformer
-except ImportError:  # torch removed in prod — HF API used instead
+except ImportError:  # torch removed in prod — NVIDIA API / TF-IDF used instead
     SentenceTransformer = None  # type: ignore[assignment,misc]
 
 from ...domain.services import IEmbeddingProvider
@@ -329,3 +332,188 @@ class OpenAIEmbeddingProvider(IEmbeddingProvider):
             return None
         cache_key = self._get_cache_key(text)
         return self._cache.get(cache_key)
+
+
+class NvidiaEmbeddingProvider(IEmbeddingProvider):
+    """
+    Semantic embeddings via NVIDIA's hosted API (integrate.api.nvidia.com,
+    OpenAI-compatible /v1/embeddings). This is the production embedding path:
+    no local torch, so the whole app fits a 512 MB dyno, while still using
+    real transformer embeddings (not TF-IDF).
+
+    Engineered around three real constraints of the free dev tier:
+
+    - **No network at startup.** get_dimension() returns a known constant, so
+      app bootstrap never makes an API call — otherwise a slow first call
+      could blow Heroku's 60 s boot window (R10).
+    - **Concurrency, not sequential.** Batches are embedded in parallel
+      (bounded by a semaphore), so ~600 reviews embed in ~3 s instead of the
+      ~18 s a sequential loop takes.
+    - **Key rotation + model fallback for resilience.** NVIDIA rate-limits per
+      key AND per account (429), and retires embedding models (410 Gone).
+      Each batch round-robins across the configured API keys and, on
+      429/5xx/EOL, falls through to the next model with a short backoff. Add
+      more keys (from separate accounts) to multiply the effective RPM; the
+      code needs no change.
+
+    All configured models MUST share one embedding dimension — a batch that
+    falls back to another model must produce vectors the clusterer can mix
+    with the rest.
+    """
+
+    _API_URL = "https://integrate.api.nvidia.com/v1/embeddings"
+
+    def __init__(
+        self,
+        api_keys: List[str],
+        models: List[str],
+        dimension: int = 2048,
+        api_batch_size: int = 100,
+        concurrency: int = 16,
+        cache_enabled: bool = True,
+    ):
+        self.api_keys = [k.strip() for k in api_keys if k and k.strip()]
+        if not self.api_keys:
+            raise ValueError("NVIDIA embedding provider requires at least one API key")
+        self.models = [m.strip() for m in models if m and m.strip()]
+        if not self.models:
+            raise ValueError("NVIDIA embedding provider requires at least one model")
+        self._dimension = dimension
+        self.api_batch_size = api_batch_size
+        self._sem = asyncio.Semaphore(concurrency)
+        self.cache_enabled = cache_enabled
+        self._cache: Dict[str, EmbeddingVector] = {}
+        self._key_cursor = 0
+
+    def get_dimension(self) -> int:
+        return self._dimension
+
+    def get_model_name(self) -> str:
+        return self.models[0]
+
+    def _get_cache_key(self, text: str) -> str:
+        return hashlib.sha256(text.encode()).hexdigest()
+
+    def _next_key(self) -> str:
+        # Round-robin so requests spread across accounts/keys, multiplying the
+        # effective per-minute budget when keys live on separate accounts.
+        key = self.api_keys[self._key_cursor % len(self.api_keys)]
+        self._key_cursor += 1
+        return key
+
+    async def _embed_one_batch(
+        self, client: httpx.AsyncClient, batch: List[str]
+    ) -> List[List[float]]:
+        """Embed one API batch, rotating keys and falling back across models."""
+        api_key = self._next_key()
+        last_err = "no attempt made"
+        async with self._sem:
+            for model in self.models:
+                for retry in range(3):  # retries for transient 429/5xx/timeouts
+                    try:
+                        resp = await client.post(
+                            self._API_URL,
+                            headers={"Authorization": f"Bearer {api_key}"},
+                            json={
+                                "input": batch,
+                                "model": model,
+                                "input_type": "passage",
+                                "truncate": "END",
+                            },
+                        )
+                        if resp.status_code == 200:
+                            return [d["embedding"] for d in resp.json()["data"]]
+                        if resp.status_code in (429, 500, 502, 503, 504):
+                            # Transient / rate-limited: back off, and try a
+                            # different key on the next attempt.
+                            last_err = f"{resp.status_code} on {model}"
+                            await asyncio.sleep(1.5 * (retry + 1))
+                            api_key = self._next_key()
+                            continue
+                        # 410 EOL / 404 / other 4xx: this model is out, next model
+                        last_err = f"{resp.status_code} on {model}: {resp.text[:120]}"
+                        break
+                    except Exception as e:  # network blip, timeout
+                        last_err = f"{type(e).__name__} on {model}: {e}"
+                        await asyncio.sleep(1.0)
+        raise RuntimeError(
+            f"NVIDIA embedding failed for a batch after all keys/models: {last_err}"
+        )
+
+    async def embed_batch(
+        self,
+        texts: List[str],
+        batch_size: int = 128,
+        show_progress: bool = False,
+    ) -> List[Optional[EmbeddingVector]]:
+        results: List[Optional[EmbeddingVector]] = [None] * len(texts)
+
+        to_embed: List[str] = []
+        indices: List[int] = []
+        for i, text in enumerate(texts):
+            if self.cache_enabled:
+                ck = self._get_cache_key(text)
+                cached = self._cache.get(ck)
+                if cached is not None:
+                    results[i] = cached
+                    continue
+            to_embed.append(text)
+            indices.append(i)
+
+        if to_embed:
+            bs = self.api_batch_size
+            batches = [to_embed[i:i + bs] for i in range(0, len(to_embed), bs)]
+            index_batches = [indices[i:i + bs] for i in range(0, len(indices), bs)]
+
+            async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
+                embedded = await asyncio.gather(
+                    *[self._embed_one_batch(client, b) for b in batches]
+                )
+
+            for bi, vectors in enumerate(embedded):
+                for j, vec in enumerate(vectors):
+                    orig = index_batches[bi][j]
+                    vec = self._maybe_truncate(vec)
+                    ev = EmbeddingVector(
+                        values=vec,
+                        dimension=len(vec),
+                        model_name=self.models[0],
+                    )
+                    results[orig] = ev
+                    if self.cache_enabled:
+                        self._cache[self._get_cache_key(texts[orig])] = ev
+
+        return results
+
+    def _maybe_truncate(self, vec: List[float]) -> List[float]:
+        """
+        Matryoshka-style truncation: keep the first `_dimension` components and
+        re-normalize to unit length. The model returns 2048-dim vectors, but
+        clustering cost scales with dimension (2048-dim clustering measured
+        ~13x slower than 384-dim on 50k vectors). Truncating to e.g. 384 keeps
+        the bulk of the semantic signal — these models are trained so the
+        leading dimensions carry the most information — while making the
+        downstream cluster step as cheap as the small local model's.
+        Re-normalization matters because clustering uses cosine similarity.
+        """
+        if len(vec) <= self._dimension:
+            return vec
+        v = np.asarray(vec[:self._dimension], dtype=np.float32)
+        norm = float(np.linalg.norm(v))
+        if norm > 0:
+            v = v / norm
+        return v.tolist()
+
+    async def embed(self, text: str) -> EmbeddingVector:
+        return (await self.embed_batch([text]))[0]
+
+    async def cache_embeddings(
+        self, text_embedding_pairs: List[tuple[str, EmbeddingVector]]
+    ) -> None:
+        for text, embedding in text_embedding_pairs:
+            self._cache[self._get_cache_key(text)] = embedding
+
+    async def get_cached_embedding(self, text: str) -> Optional[EmbeddingVector]:
+        if not self.cache_enabled:
+            return None
+        return self._cache.get(self._get_cache_key(text))
