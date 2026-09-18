@@ -4,7 +4,13 @@ const nextConfig: NextConfig = {
   // Emit a self-contained server bundle (.next/standalone) so the production
   // Docker image ships only the traced runtime deps + server.js, not the full
   // node_modules. Keeps the frontend image small and fast to pull/deploy.
-  output: "standalone",
+  //
+  // Deliberately NOT set on Vercel. Vercel runs its own @vercel/nft tracing and
+  // expects the default build output; standalone mode doesn't emit the trace
+  // files it looks for, so the deploy dies with
+  // "ENOENT: ... .next/next-server.js.nft.json". Vercel sets VERCEL=1 during
+  // builds, so self-hosted/Docker builds keep standalone and Vercel doesn't.
+  output: process.env.VERCEL ? undefined : "standalone",
 
   reactCompiler: true,
 
